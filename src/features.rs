@@ -81,12 +81,12 @@ pub fn absolute_features(
     }
     let centroid_dists: Vec<f64> =
         candidates.iter().map(|p| haversine_m(cluster.centroid, p.centroid)).collect();
-    let wkt_dists: Vec<f64> = candidates
+    let polygon_dists: Vec<f64> = candidates
         .iter()
         .map(|p| distance_to_polygon_m(cluster.centroid, &p.polygon))
         .collect();
     let centroid_ranks = ranks(&centroid_dists);
-    let wkt_ranks = ranks(&wkt_dists);
+    let polygon_ranks = ranks(&polygon_dists);
     let hour = cluster.hour_of_day();
     candidates
         .iter()
@@ -94,9 +94,9 @@ pub fn absolute_features(
         .map(|(i, place)| {
             let mut row = Vec::with_capacity(schema.dim());
             row.push(centroid_dists[i]);
-            row.push(wkt_dists[i]);
+            row.push(polygon_dists[i]);
             row.push(centroid_ranks[i]);
-            row.push(wkt_ranks[i]);
+            row.push(polygon_ranks[i]);
             append_naics_hour(schema, place.naics4(), hour, &mut row);
             (place.id, row)
         })
