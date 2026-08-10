@@ -130,7 +130,7 @@ impl PlaceIndex for BruteForcePlaceIndex {
     }
 }
 
-/// Factory for [`BruteForcePlaceIndex`].
+/// Factory for the default grid-accelerated place index.
 #[derive(Debug, Clone)]
 pub struct BruteForcePlaceIndexFactory {
     config: Config,

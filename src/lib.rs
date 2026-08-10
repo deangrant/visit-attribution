@@ -5,6 +5,10 @@
 //! preference-learning gradient-boosted model. The crate is **std-first**: no
 //! required third-party dependencies.
 //!
+//! The primary API is train-then-attribute ([`GbdtRanker`], [`VisitAttributor`]).
+//! Stage traits and default implementations are exported for custom wiring via
+//! [`with_parts`].
+//!
 //! # Quick start
 //!
 //! Train a ranker on labeled clusters, then attribute a trajectory:
@@ -83,33 +87,28 @@ mod pipeline;
 mod rank;
 mod types;
 
+// Domain
 #[doc(inline)]
-pub use clean::{DefaultPingCleaner, PingCleaner};
-#[doc(inline)]
-pub use cluster::{Clusterer, LargePoiClusterer, TimeAwareDensityClusterer, TwoPassClusterer};
+pub use types::{Cluster, GpsPing, Place, PlaceId, Point, Visit};
 #[doc(inline)]
 pub use config::{Config, ConfigBuilder};
 #[doc(inline)]
 pub use error::{Error, Result};
+
+// Pipeline
 #[doc(inline)]
-pub use features::{
-    absolute_features, inference_pairs, preference_pairs, FeatureSchema, LabeledExample,
-    PreferencePair,
-};
+pub use features::{FeatureSchema, LabeledExample};
 #[doc(inline)]
 pub use gbdt::{GbdtModel, TrainConfig};
 #[doc(inline)]
-pub use geo::{
-    expand_ring_radial, distance_to_polygon_m, haversine_m, point_in_polygon, ring_area_m2, BBox,
-    EARTH_RADIUS_M,
-};
-#[doc(inline)]
-pub use join::{
-    places_by_ids, BruteForcePlaceIndex, BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory,
-};
+pub use rank::{GbdtRanker, Ranker};
 #[doc(inline)]
 pub use pipeline::{with_parts, AttributionResult, VisitAttributor, VisitAttributorBuilder};
+
+// Extension (custom stage wiring via `with_parts`)
 #[doc(inline)]
-pub use rank::{visit_from_rank, GbdtRanker, Ranker};
+pub use clean::{DefaultPingCleaner, PingCleaner};
 #[doc(inline)]
-pub use types::{Cluster, GpsPing, Place, PlaceId, Point, Visit};
+pub use cluster::{Clusterer, TwoPassClusterer};
+#[doc(inline)]
+pub use join::{BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory};
