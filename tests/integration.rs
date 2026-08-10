@@ -49,7 +49,8 @@ fn attributes_visit_to_trained_place() {
     let config = Config::builder().min_cluster_pings(2).join_buffer_m(80.0).build().unwrap();
     let places = vec![left, right];
     let attributor = VisitAttributor::builder().config(config).ranker(ranker).build().unwrap();
-    let visits = attributor.attribute(&pings, &places).unwrap();
-    assert_eq!(visits.len(), 1);
-    assert_eq!(visits[0].place_id, 10);
+    let result = attributor.attribute(&pings, &places).unwrap();
+    assert_eq!(result.visits.len(), 1);
+    assert_eq!(result.visits[0].place_id, 10);
+    assert!(result.unmatched_clusters.is_empty());
 }

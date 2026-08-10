@@ -6,7 +6,16 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::join::{BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory};
 use crate::rank::{visit_from_rank, GbdtRanker, Ranker};
-use crate::types::{GpsPing, Place, Visit};
+use crate::types::{Cluster, GpsPing, Place, Visit};
+
+/// Outcome of attributing a trajectory: ranked visits plus join misses.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttributionResult {
+    /// Clusters successfully ranked to a place.
+    pub visits: Vec<Visit>,
+    /// Clusters with no join candidates (catalog or buffer miss).
+    pub unmatched_clusters: Vec<Cluster>,
+}
 
 /// Full pipeline: clean → cluster → join → rank.
 #[derive(Debug, Clone)]
@@ -37,23 +46,32 @@ where
 {
     /// Attribute visits for a device trajectory against a place catalog.
     ///
+    /// Clusters that find no join candidates are not ranked; they are returned
+    /// in [`AttributionResult::unmatched_clusters`] so callers can detect
+    /// catalog gaps or join-buffer misses in production.
+    ///
     /// # Errors
     ///
     /// Propagates ranking errors for clusters that have candidates.
-    pub fn attribute(&self, pings: &[GpsPing], places: &[Place]) -> Result<Vec<Visit>> {
+    pub fn attribute(&self, pings: &[GpsPing], places: &[Place]) -> Result<AttributionResult> {
         let cleaned = self.cleaner.clean(pings);
         let clusters = self.clusterer.cluster(&cleaned, places);
         let index = self.index_factory.create(places);
         let mut visits = Vec::new();
+        let mut unmatched_clusters = Vec::new();
         for cluster in clusters {
             let candidates = index.candidates(&cluster);
             if candidates.is_empty() {
+                unmatched_clusters.push(cluster);
                 continue;
             }
             let (place_id, wins) = self.ranker.rank(&cluster, &candidates)?;
             visits.push(visit_from_rank(cluster, &candidates, place_id, wins));
         }
-        Ok(visits)
+        Ok(AttributionResult {
+            visits,
+            unmatched_clusters,
+        })
     }
 
     /// Borrow the pipeline configuration.
@@ -119,5 +137,71 @@ pub fn with_parts<Cl, C, F, R>(
         clusterer,
         index_factory,
         ranker,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::PlaceId;
+
+    struct IdentityCleaner;
+
+    impl PingCleaner for IdentityCleaner {
+        fn clean(&self, pings: &[GpsPing]) -> Vec<GpsPing> {
+            pings.to_vec()
+        }
+    }
+
+    struct FixedClusterer(Cluster);
+
+    impl Clusterer for FixedClusterer {
+        fn cluster(&self, _pings: &[GpsPing], _places: &[Place]) -> Vec<Cluster> {
+            vec![self.0.clone()]
+        }
+    }
+
+    struct EmptyIndex;
+
+    impl PlaceIndex for EmptyIndex {
+        fn candidates(&self, _cluster: &Cluster) -> Vec<Place> {
+            Vec::new()
+        }
+    }
+
+    struct EmptyIndexFactory;
+
+    impl PlaceIndexFactory for EmptyIndexFactory {
+        type Index = EmptyIndex;
+
+        fn create(&self, _places: &[Place]) -> Self::Index {
+            EmptyIndex
+        }
+    }
+
+    struct PanicRanker;
+
+    impl Ranker for PanicRanker {
+        fn rank(&self, _cluster: &Cluster, _candidates: &[Place]) -> Result<(PlaceId, u32)> {
+            panic!("rank should not run for unmatched clusters");
+        }
+    }
+
+    #[test]
+    fn surfaces_clusters_with_no_candidates() {
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0001, 0.0, 10.0, 10.0),
+        ]);
+        let attributor = with_parts(
+            Config::default(),
+            IdentityCleaner,
+            FixedClusterer(cluster.clone()),
+            EmptyIndexFactory,
+            PanicRanker,
+        );
+        let result = attributor.attribute(&cluster.pings, &[]).unwrap();
+        assert!(result.visits.is_empty());
+        assert_eq!(result.unmatched_clusters, vec![cluster]);
     }
 }

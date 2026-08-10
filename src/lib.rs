@@ -64,7 +64,8 @@
 //!     .unwrap();
 //! let visits = attributor
 //!     .attribute(&cluster.pings, &places)
-//!     .unwrap();
+//!     .unwrap()
+//!     .visits;
 //! assert!(!visits.is_empty());
 //! assert_eq!(visits[0].place_id, 1);
 //! ```
@@ -106,7 +107,7 @@ pub use join::{
     places_by_ids, BruteForcePlaceIndex, BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory,
 };
 #[doc(inline)]
-pub use pipeline::{with_parts, VisitAttributor, VisitAttributorBuilder};
+pub use pipeline::{with_parts, AttributionResult, VisitAttributor, VisitAttributorBuilder};
 #[doc(inline)]
 pub use rank::{visit_from_rank, GbdtRanker, Ranker};
 #[doc(inline)]

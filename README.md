@@ -64,11 +64,13 @@ let ranker = GbdtRanker::train(
     &TrainConfig::default(),
 )?;
 let places = vec![place, other];
-let visits = VisitAttributor::builder()
+let result = VisitAttributor::builder()
     .config(Config::default())
     .ranker(ranker)
     .build()?
     .attribute(&pings, &places)?;
+// `result.unmatched_clusters` holds stay clusters with no join candidates.
+let visits = result.visits;
 # let _ = visits;
 # Ok(())
 # }

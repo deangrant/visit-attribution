@@ -49,7 +49,7 @@ fn main() {
         .ranker(ranker)
         .build()
         .expect("build");
-    let visits = attributor.attribute(&pings, &places).expect("attribute");
+    let visits = attributor.attribute(&pings, &places).expect("attribute").visits;
     for visit in &visits {
         println!(
             "visit place_id={} wins={} duration_s={:.0} candidates={:?}",
