@@ -110,8 +110,13 @@ fn filter_driving(
         let dt = (window[window.len() - 1].time_s - window[0].time_s).max(1e-6);
         let speed = path / dt;
         if linearity <= linearity_threshold && speed >= driving_speed_m_s {
-            for flag in &mut drop[left..=right] {
-                *flag = true;
+            // Drop only arrivals on fast hops so dwell edges in the window survive.
+            for i in left..right {
+                let hop_dt = (pings[i + 1].time_s - pings[i].time_s).max(1e-6);
+                let hop = haversine_m(pings[i].point, pings[i + 1].point);
+                if hop / hop_dt >= driving_speed_m_s {
+                    drop[i + 1] = true;
+                }
             }
         }
     }
@@ -170,5 +175,23 @@ mod tests {
             ping(0.0, 0.00001, 20.0, 10.0),
         ]);
         assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn driving_filter_preserves_dwell_before_drive() {
+        let cleaner = DefaultPingCleaner::new(Config::default());
+        let pings = [
+            ping(0.0, 0.0, 0.0, 10.0),
+            ping(0.00001, 0.0, 10.0, 10.0),
+            ping(0.0, 0.00001, 20.0, 10.0),
+            // ~1.1 km / 10 s ≈ 111 m/s, well above driving_speed_m_s.
+            ping(0.01, 0.0, 30.0, 10.0),
+            ping(0.02, 0.0, 40.0, 10.0),
+            ping(0.03, 0.0, 50.0, 10.0),
+        ];
+        let out = cleaner.clean(&pings);
+        let dwell: Vec<_> = out.iter().filter(|p| p.time_s <= 20.0).collect();
+        assert_eq!(dwell.len(), 3);
+        assert!(out.len() < pings.len());
     }
 }
