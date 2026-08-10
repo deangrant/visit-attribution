@@ -144,11 +144,21 @@ impl Cluster {
         (self.end_time_s - self.start_time_s).max(0.0)
     }
 
-    /// Hour of day (0–23) from `start_time_s`, treating the value as Unix time.
+    /// Hour of day (0–23) from `start_time_s` as Unix-like seconds.
+    ///
+    /// Uses seconds-of-day via `rem_euclid` (negative times wrap). Non-finite
+    /// values (`NaN`, ±∞) return `0`.
     #[must_use]
     pub fn hour_of_day(&self) -> u8 {
-        let hour = ((self.start_time_s.floor() as i64).rem_euclid(86_400) / 3600) as u8;
-        hour.min(23)
+        if !self.start_time_s.is_finite() {
+            return 0;
+        }
+        let hour = (self.start_time_s.rem_euclid(86_400.0) / 3600.0).floor();
+        // rem_euclid keeps seconds in [0, 86400); hour is in [0, 23].
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        {
+            hour as u8
+        }
     }
 }
 
@@ -196,5 +206,26 @@ mod tests {
         assert_eq!(cluster.centroid, Point::new(1.5, -2.5));
         assert_eq!(cluster.start_time_s, 10.0);
         assert_eq!(cluster.end_time_s, 10.0);
+    }
+
+    fn cluster_at(time_s: f64) -> Cluster {
+        Cluster::from_pings(vec![GpsPing::new(0.0, 0.0, time_s, 5.0)]).unwrap()
+    }
+
+    #[test]
+    fn hour_of_day_boundaries_and_wrap() {
+        assert_eq!(cluster_at(0.0).hour_of_day(), 0);
+        assert_eq!(cluster_at(3_600.0).hour_of_day(), 1);
+        assert_eq!(cluster_at(86_399.0).hour_of_day(), 23);
+        assert_eq!(cluster_at(86_400.0).hour_of_day(), 0);
+        assert_eq!(cluster_at(3_600.5).hour_of_day(), 1);
+        assert_eq!(cluster_at(-1.0).hour_of_day(), 23);
+    }
+
+    #[test]
+    fn hour_of_day_non_finite_is_zero() {
+        assert_eq!(cluster_at(f64::NAN).hour_of_day(), 0);
+        assert_eq!(cluster_at(f64::INFINITY).hour_of_day(), 0);
+        assert_eq!(cluster_at(f64::NEG_INFINITY).hour_of_day(), 0);
     }
 }
