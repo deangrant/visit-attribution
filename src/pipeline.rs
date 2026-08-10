@@ -123,21 +123,25 @@ impl VisitAttributorBuilder {
 }
 
 /// Construct an attributor with explicit stage implementations.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidInput`] when `config` fails [`Config::validate`].
 pub fn with_parts<Cl, C, F, R>(
     config: Config,
     cleaner: Cl,
     clusterer: C,
     index_factory: F,
     ranker: R,
-) -> VisitAttributor<Cl, C, F, R> {
-    VisitAttributor {
+) -> Result<VisitAttributor<Cl, C, F, R>> {
+    config.validate()?;
+    Ok(VisitAttributor {
         config,
         cleaner,
         clusterer,
         index_factory,
         ranker,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -199,9 +203,27 @@ mod tests {
             FixedClusterer(cluster.clone()),
             EmptyIndexFactory,
             PanicRanker,
-        );
+        )
+        .unwrap();
         let result = attributor.attribute(&cluster.pings, &[]).unwrap();
         assert!(result.visits.is_empty());
         assert_eq!(result.unmatched_clusters, vec![cluster]);
+    }
+
+    #[test]
+    fn with_parts_rejects_invalid_config() {
+        let mut config = Config::default();
+        config.max_time_gap_s = 0.0;
+        let result = with_parts(
+            config,
+            IdentityCleaner,
+            FixedClusterer(Cluster::from_pings(vec![
+                GpsPing::new(0.0, 0.0, 0.0, 10.0),
+                GpsPing::new(0.0, 0.0, 1.0, 10.0),
+            ])),
+            EmptyIndexFactory,
+            PanicRanker,
+        );
+        assert!(matches!(result, Err(Error::InvalidInput(_))));
     }
 }
