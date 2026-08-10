@@ -90,9 +90,17 @@ impl Place {
     }
 
     /// Four-digit NAICS prefix, if a NAICS code is present.
+    ///
+    /// Takes the most-significant four digits for any positive code length
+    /// (6-digit → 4-digit industry group; already-4-digit unchanged).
     #[must_use]
     pub fn naics4(&self) -> Option<u32> {
-        self.naics.map(|n| n / 100)
+        self.naics.map(|mut n| {
+            while n >= 10_000 {
+                n /= 10;
+            }
+            n
+        })
     }
 }
 
@@ -159,4 +167,20 @@ pub struct Visit {
     pub wins: u32,
     /// Candidate place ids considered for this cluster.
     pub candidates: Vec<PlaceId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn naics4_takes_most_significant_four_digits() {
+        let six = Place::new(1, vec![], Point::new(0.0, 0.0), Some(445_110), 1.0);
+        let five = Place::new(2, vec![], Point::new(0.0, 0.0), Some(44_511), 1.0);
+        let four = Place::new(3, vec![], Point::new(0.0, 0.0), Some(4_451), 1.0);
+        assert_eq!(six.naics4(), Some(4_451));
+        assert_eq!(five.naics4(), Some(4_451));
+        assert_eq!(four.naics4(), Some(4_451));
+        assert_eq!(Place::new(4, vec![], Point::new(0.0, 0.0), None, 1.0).naics4(), None);
+    }
 }

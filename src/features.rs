@@ -1,26 +1,48 @@
 //! Feature vectors for preference learning over place candidates.
 
+use std::collections::HashMap;
+
 use crate::geo::{distance_to_polygon_m, haversine_m};
 use crate::types::{Cluster, Place, PlaceId};
 
 /// Absolute feature layout shared by training and inference.
+///
+/// The schema is frozen at train time: known NAICS4 prefixes are listed in
+/// [`FeatureSchema::naics4`], and `dim` always reserves one extra hour block for
+/// unknown/missing NAICS (serve-time codes not in the list map there). Cap
+/// growth with `max_naics4` when building via [`FeatureSchema::from_places`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureSchema {
-    /// Sorted unique 4-digit NAICS prefixes used for time-of-day one-hots.
+    /// Sorted unique known 4-digit NAICS prefixes (UNK bucket is implicit).
     pub naics4: Vec<u32>,
 }
 
 impl FeatureSchema {
-    /// Build a schema from the NAICS codes present on places.
+    /// Build a schema from place NAICS, keeping up to `max_naics4` frequent codes.
+    ///
+    /// Frequency ties break by ascending code. Codes beyond the cap, and places
+    /// with missing NAICS, use the implicit UNK hour block at feature time.
+    /// `max_naics4 == 0` yields an UNK-only schema.
     #[must_use]
-    pub fn from_places(places: &[Place]) -> Self {
-        let mut naics4: Vec<u32> = places.iter().filter_map(Place::naics4).collect();
+    pub fn from_places(places: &[Place], max_naics4: usize) -> Self {
+        let mut counts: HashMap<u32, usize> = HashMap::new();
+        for place in places {
+            if let Some(code) = place.naics4() {
+                *counts.entry(code).or_insert(0) += 1;
+            }
+        }
+        let mut ranked: Vec<(u32, usize)> = counts.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let naics4: Vec<u32> = ranked.into_iter().take(max_naics4).map(|(code, _)| code).collect();
+        // Keep known codes sorted for stable layout / model text.
+        let mut naics4 = naics4;
         naics4.sort_unstable();
-        naics4.dedup();
         Self { naics4 }
     }
 
-    /// Explicit schema from caller-supplied NAICS4 prefixes.
+    /// Explicit schema from caller-supplied known NAICS4 prefixes.
+    ///
+    /// The UNK hour block is always implied by [`Self::dim`] and is not listed.
     #[must_use]
     pub fn new(mut naics4: Vec<u32>) -> Self {
         naics4.sort_unstable();
@@ -31,8 +53,8 @@ impl FeatureSchema {
     /// Number of dense features per (cluster, place) row.
     #[must_use]
     pub fn dim(&self) -> usize {
-        // Four distance features plus NAICS4 × hour one-hots.
-        4 + self.naics4.len() * 24
+        // Four distance features + known NAICS4×hour + one UNK×hour block.
+        4 + (self.naics4.len() + 1) * 24
     }
 }
 
@@ -83,11 +105,15 @@ pub fn absolute_features(
 
 fn append_naics_hour(schema: &FeatureSchema, naics4: Option<u32>, hour: u8, row: &mut Vec<f64>) {
     let hour = usize::from(hour.min(23));
+    let in_schema = naics4.map(|n| schema.naics4.binary_search(&n).is_ok()).unwrap_or(false);
     for code in &schema.naics4 {
         for h in 0..24 {
             let on = matches!(naics4, Some(n) if n == *code) && h == hour;
             row.push(if on { 1.0 } else { 0.0 });
         }
+    }
+    for h in 0..24 {
+        row.push(if !in_schema && h == hour { 1.0 } else { 0.0 });
     }
 }
 
@@ -186,6 +212,21 @@ mod tests {
     use super::*;
     use crate::types::{GpsPing, Point};
 
+    fn bare_place(id: PlaceId, naics: Option<u32>) -> Place {
+        Place::new(
+            id,
+            vec![
+                Point::new(0.0, 0.0),
+                Point::new(0.0, 0.001),
+                Point::new(0.001, 0.001),
+                Point::new(0.001, 0.0),
+            ],
+            Point::new(0.0005, 0.0005),
+            naics,
+            100.0,
+        )
+    }
+
     #[test]
     fn preference_labels_only_involve_true_place() {
         let schema = FeatureSchema::new(vec![4451]);
@@ -193,18 +234,7 @@ mod tests {
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
         ]);
-        let a = Place::new(
-            1,
-            vec![
-                Point::new(-0.001, -0.001),
-                Point::new(-0.001, 0.001),
-                Point::new(0.001, 0.001),
-                Point::new(0.001, -0.001),
-            ],
-            Point::new(0.0, 0.0),
-            Some(445_110),
-            100.0,
-        );
+        let a = bare_place(1, Some(445_110));
         let b = Place::new(
             2,
             vec![
@@ -224,5 +254,54 @@ mod tests {
             (p.label - 1.0).abs() < f64::EPSILON || (p.label + 1.0).abs() < f64::EPSILON
         }));
         assert!(pairs.iter().all(|p| p.left_id == 1 || p.right_id == 1));
+    }
+
+    #[test]
+    fn dim_includes_unk_hour_block() {
+        let schema = FeatureSchema::new(vec![4451]);
+        assert_eq!(schema.dim(), 4 + 2 * 24);
+        assert_eq!(FeatureSchema::new(vec![]).dim(), 4 + 24);
+    }
+
+    #[test]
+    fn unseen_or_missing_naics_activates_unk_hour() {
+        let schema = FeatureSchema::new(vec![4451]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0, 0.0, 3_600.0, 5.0), // hour 1 if Unix-like epoch day
+            GpsPing::new(0.0, 0.0, 3_610.0, 5.0),
+        ]);
+        let hour = usize::from(cluster.hour_of_day());
+        let unseen = bare_place(1, Some(722_515));
+        let missing = bare_place(2, None);
+        let known = bare_place(3, Some(445_110));
+
+        let rows = absolute_features(&schema, &cluster, &[unseen, missing, known]);
+        let unk_base = 4 + 24; // after known code block
+        assert!((rows[0].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
+        assert!((rows[1].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
+        assert!((rows[2].1[unk_base + hour]).abs() < f64::EPSILON);
+        assert!((rows[2].1[4 + hour] - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn from_places_keeps_top_k_by_frequency() {
+        let places = vec![
+            bare_place(1, Some(445_110)),
+            bare_place(2, Some(445_110)),
+            bare_place(3, Some(445_110)),
+            bare_place(4, Some(722_515)),
+        ];
+        let schema = FeatureSchema::from_places(&places, 1);
+        assert_eq!(schema.naics4, vec![4451]);
+
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0, 0.0, 0.0, 5.0),
+            GpsPing::new(0.0, 0.0, 10.0, 5.0),
+        ]);
+        let hour = usize::from(cluster.hour_of_day());
+        let rare = bare_place(9, Some(722_515));
+        let row = &absolute_features(&schema, &cluster, &[rare])[0].1;
+        let unk_base = 4 + 24;
+        assert!((row[unk_base + hour] - 1.0).abs() < f64::EPSILON);
     }
 }

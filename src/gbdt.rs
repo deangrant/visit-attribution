@@ -21,6 +21,8 @@ pub struct TrainConfig {
     pub subsample_stride: usize,
     /// Maximum split thresholds evaluated per feature.
     pub max_bins: usize,
+    /// Max distinct NAICS4 prefixes kept in the feature schema (0 = UNK only).
+    pub max_naics4: usize,
 }
 
 impl Default for TrainConfig {
@@ -32,6 +34,7 @@ impl Default for TrainConfig {
             learning_rate: 0.1,
             subsample_stride: 1,
             max_bins: 16,
+            max_naics4: 32,
         }
     }
 }
@@ -471,16 +474,17 @@ fn parse_keyed_usize(line: &str, key: &str) -> Result<usize> {
 mod tests {
     use super::*;
 
+    fn row4(first: f64) -> Vec<f64> {
+        let mut v = vec![0.0; 28]; // empty-naics schema dim = 4 + 24 UNK
+        v[0] = first;
+        v
+    }
+
     #[test]
     fn learns_simple_preference_direction() {
         let schema = FeatureSchema::new(vec![]);
         // Difference feature: positive when left is better on first dim.
-        let xs = vec![
-            vec![2.0, 0.0, 0.0, 0.0],
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![-2.0, 0.0, 0.0, 0.0],
-            vec![-1.0, 0.0, 0.0, 0.0],
-        ];
+        let xs = vec![row4(2.0), row4(1.0), row4(-2.0), row4(-1.0)];
         let ys = vec![1.0, 1.0, -1.0, -1.0];
         let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
         assert!(model.predict_raw(&xs[0]).unwrap() > 0.0);
@@ -495,7 +499,7 @@ mod tests {
 
     #[test]
     fn load_rejects_dim_mismatch_with_schema() {
-        // Empty naics ⇒ schema.dim() == 4; claim dim 99.
+        // Empty naics ⇒ schema.dim() == 4 + 24 (UNK); claim dim 99.
         let text = "\
 VA_GBDT 1
 base 0
@@ -511,15 +515,15 @@ L 0
 
     #[test]
     fn load_rejects_out_of_range_feature_index() {
-        // dim 4, but branch splits on feature 10.
+        // Empty naics ⇒ dim 28; branch splits on feature 40.
         let text = "\
 VA_GBDT 1
 base 0
 lr 0.1
-dim 4
+dim 28
 naics
 trees 1
-B 10 0 L 1 L -1
+B 40 0 L 1 L -1
 ";
         let err = GbdtModel::from_string_format(text).unwrap_err();
         assert!(matches!(err, Error::Model(_)));
@@ -528,7 +532,7 @@ B 10 0 L 1 L -1
     #[test]
     fn predict_raw_rejects_wrong_width() {
         let schema = FeatureSchema::new(vec![]);
-        let xs = vec![vec![1.0, 0.0, 0.0, 0.0], vec![-1.0, 0.0, 0.0, 0.0]];
+        let xs = vec![row4(1.0), row4(-1.0)];
         let ys = vec![1.0, -1.0];
         let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
         let err = model.predict_raw(&[1.0, 0.0]).unwrap_err();

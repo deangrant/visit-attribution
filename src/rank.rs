@@ -52,7 +52,7 @@ impl GbdtRanker {
         for ex in examples {
             places.extend(ex.candidates.iter().cloned());
         }
-        let schema = FeatureSchema::from_places(&places);
+        let schema = FeatureSchema::from_places(&places, config.max_naics4);
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         for ex in examples {
