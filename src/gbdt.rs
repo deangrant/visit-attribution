@@ -108,7 +108,7 @@ impl GbdtModel {
             }
             let tree = build_tree(&sample_x, &residuals, config, 0);
             for (i, row) in xs.iter().enumerate() {
-                preds[i] += config.learning_rate * eval_tree(&tree, row);
+                preds[i] += config.learning_rate * eval_tree(&tree, row)?;
             }
             trees.push(tree);
         }
@@ -121,13 +121,24 @@ impl GbdtModel {
     }
 
     /// Predict a continuous preference score for a difference vector.
-    #[must_use]
-    pub fn predict_raw(&self, x: &[f64]) -> f64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidInput`] when `x` does not match the schema width,
+    /// or [`Error::Model`] if a tree indexes past the vector (corrupt model).
+    pub fn predict_raw(&self, x: &[f64]) -> Result<f64> {
+        if x.len() != self.schema.dim() {
+            return Err(Error::InvalidInput(format!(
+                "feature vector width {}, expected {}",
+                x.len(),
+                self.schema.dim()
+            )));
+        }
         let mut s = self.base_score;
         for tree in &self.trees {
-            s += self.learning_rate * eval_tree(tree, x);
+            s += self.learning_rate * eval_tree(tree, x)?;
         }
-        s
+        Ok(s)
     }
 
     /// Save the model to a versioned text file.
@@ -192,7 +203,7 @@ impl GbdtModel {
             lines.next().ok_or_else(|| Error::Model("missing lr".into()))?,
             "lr",
         )?;
-        let _dim = parse_keyed_usize(
+        let dim = parse_keyed_usize(
             lines.next().ok_or_else(|| Error::Model("missing dim".into()))?,
             "dim",
         )?;
@@ -206,6 +217,13 @@ impl GbdtModel {
             naics4
                 .push(part.parse::<u32>().map_err(|_| Error::Model(format!("bad naics: {part}")))?);
         }
+        let schema = FeatureSchema { naics4 };
+        if dim != schema.dim() {
+            return Err(Error::Model(format!(
+                "dim {dim} does not match schema width {}",
+                schema.dim()
+            )));
+        }
         let n_trees = parse_keyed_usize(
             lines.next().ok_or_else(|| Error::Model("missing trees".into()))?,
             "trees",
@@ -214,10 +232,15 @@ impl GbdtModel {
         for _ in 0..n_trees {
             let line = lines.next().ok_or_else(|| Error::Model("missing tree line".into()))?;
             let mut toks = line.split_whitespace().peekable();
-            trees.push(parse_node(&mut toks)?);
+            let tree = parse_node(&mut toks)?;
+            if toks.next().is_some() {
+                return Err(Error::Model("trailing tokens on tree line".into()));
+            }
+            validate_node(&tree, dim)?;
+            trees.push(tree);
         }
         Ok(Self {
-            schema: FeatureSchema { naics4 },
+            schema,
             base_score,
             learning_rate,
             trees,
@@ -315,20 +338,46 @@ fn variance(values: &[f64]) -> f64 {
     values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / values.len() as f64
 }
 
-fn eval_tree(node: &Node, x: &[f64]) -> f64 {
+fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
     match node {
-        Node::Leaf { value } => *value,
+        Node::Leaf { value } => Ok(*value),
         Node::Branch {
             feature,
             threshold,
             left,
             right,
         } => {
-            if x[*feature] <= *threshold {
+            let value = x.get(*feature).copied().ok_or_else(|| {
+                Error::Model(format!(
+                    "tree feature index {feature} out of range for width {}",
+                    x.len()
+                ))
+            })?;
+            if value <= *threshold {
                 eval_tree(left, x)
             } else {
                 eval_tree(right, x)
             }
+        }
+    }
+}
+
+fn validate_node(node: &Node, dim: usize) -> Result<()> {
+    match node {
+        Node::Leaf { .. } => Ok(()),
+        Node::Branch {
+            feature,
+            left,
+            right,
+            ..
+        } => {
+            if *feature >= dim {
+                return Err(Error::Model(format!(
+                    "tree feature index {feature} out of range for dim {dim}"
+                )));
+            }
+            validate_node(left, dim)?;
+            validate_node(right, dim)
         }
     }
 }
@@ -434,10 +483,55 @@ mod tests {
         ];
         let ys = vec![1.0, 1.0, -1.0, -1.0];
         let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        assert!(model.predict_raw(&xs[0]) > 0.0);
-        assert!(model.predict_raw(&xs[2]) < 0.0);
+        assert!(model.predict_raw(&xs[0]).unwrap() > 0.0);
+        assert!(model.predict_raw(&xs[2]).unwrap() < 0.0);
         let text = model.to_string_format();
         let loaded = GbdtModel::from_string_format(&text).unwrap();
-        assert!((loaded.predict_raw(&xs[0]) - model.predict_raw(&xs[0])).abs() < 1e-9);
+        assert!(
+            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn load_rejects_dim_mismatch_with_schema() {
+        // Empty naics ⇒ schema.dim() == 4; claim dim 99.
+        let text = "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 99
+naics
+trees 1
+L 0
+";
+        let err = GbdtModel::from_string_format(text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn load_rejects_out_of_range_feature_index() {
+        // dim 4, but branch splits on feature 10.
+        let text = "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 4
+naics
+trees 1
+B 10 0 L 1 L -1
+";
+        let err = GbdtModel::from_string_format(text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn predict_raw_rejects_wrong_width() {
+        let schema = FeatureSchema::new(vec![]);
+        let xs = vec![vec![1.0, 0.0, 0.0, 0.0], vec![-1.0, 0.0, 0.0, 0.0]];
+        let ys = vec![1.0, -1.0];
+        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
+        let err = model.predict_raw(&[1.0, 0.0]).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
     }
 }

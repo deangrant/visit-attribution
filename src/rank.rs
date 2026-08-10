@@ -112,7 +112,7 @@ impl Ranker for GbdtRanker {
         let rows = absolute_features(&self.model.schema, cluster, candidates);
         let mut wins: Vec<(PlaceId, u32)> = rows.iter().map(|(id, _)| (*id, 0_u32)).collect();
         for pair in inference_pairs(&rows) {
-            let score = self.model.predict_raw(&pair.diff);
+            let score = self.model.predict_raw(&pair.diff)?;
             if score >= 0.0 {
                 if let Some(entry) = wins.iter_mut().find(|(id, _)| *id == pair.left_id) {
                     entry.1 += 1;
