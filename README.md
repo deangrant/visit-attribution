@@ -74,10 +74,13 @@ let visits = result.visits;
 # }
 ```
 
-Run the example:
+Run the examples:
 
 ```bash
 cargo run --example basic
+cargo run --example multi_stop      # cleaning, multiple visits, unmatched clusters
+cargo run --example strip_mall      # large-POI pass + adjacent-store ranking
+cargo run --example persist_model   # train → save → load → attribute
 ```
 
 ## Default parameters

@@ -16,6 +16,18 @@ repository = "https://github.com/deangrant/visit-attribution"
 name = "basic"
 path = "examples/basic.rs"
 
+[[example]]
+name = "multi_stop"
+path = "examples/multi_stop.rs"
+
+[[example]]
+name = "strip_mall"
+path = "examples/strip_mall.rs"
+
+[[example]]
+name = "persist_model"
+path = "examples/persist_model.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
