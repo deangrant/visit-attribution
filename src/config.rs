@@ -9,7 +9,9 @@ pub struct Config {
     pub max_horizontal_accuracy_m: f64,
     /// Drop consecutive pairs whose implied speed exceeds this (m/s).
     pub max_speed_m_s: f64,
-    /// Path/net length ratio above which a window looks linear (driving).
+    /// Max `path/net` ratio at or below which a window counts as linear (driving).
+    ///
+    /// Values near `1.0` are straighter; the default `1.15` allows modest wiggle.
     pub linearity_threshold: f64,
     /// Minimum window length in seconds for the linearity driving filter.
     pub linearity_window_s: f64,
@@ -122,7 +124,7 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set the path/net linearity ratio used to detect driving.
+    /// Set max `path/net` for a window to count as linear (`<=` this value).
     pub fn linearity_threshold(mut self, v: f64) -> Self {
         self.config.linearity_threshold = v;
         self
