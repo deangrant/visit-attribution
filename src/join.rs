@@ -1,14 +1,14 @@
 //! Spatial join between clusters and places.
 //!
-//! The default index accelerates lookups with a uniform degree hash grid only
-//! (no R-tree or other hierarchical structure). Dense catalogs may still cost
-//! near-linear polygon checks per query; implement [`PlaceIndex`] for larger
-//! scale.
+//! The default index prunes candidates with a bbox quadtree, then confirms
+//! matches with [`distance_to_polygon_m`]. Implement [`PlaceIndex`] for
+//! specialized catalogs if needed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::config::Config;
 use crate::geo::{distance_to_polygon_m, meters_to_degrees, BBox};
+use crate::spatial::BBoxQuadtree;
 use crate::types::{Cluster, Place, PlaceId, Point};
 
 /// Looks up candidate places for a cluster.
@@ -39,56 +39,39 @@ pub trait PlaceIndexFactory {
     fn create(&self, places: &[Place]) -> Self::Index;
 }
 
-/// Grid-accelerated place index with distance-based join matching.
+/// Quadtree-accelerated place index with distance-based join matching.
 ///
-/// Public name kept for API stability. Candidates are pruned by a **uniform
-/// degree hash grid** over place bboxes, then confirmed with
-/// [`distance_to_polygon_m`]. There is no hierarchical spatial index (R-tree,
-/// quadtree, etc.): geographically dense catalogs can approach near-linear
-/// cost per query when many places share cells. For metro-scale catalogs,
-/// supply a custom [`PlaceIndex`] via [`PlaceIndexFactory`].
+/// Place bboxes (padded by `join_radius_m`) are stored in an axis-aligned
+/// quadtree. Queries collect overlapping leaves, then confirm with
+/// [`distance_to_polygon_m`].
 #[derive(Debug, Clone)]
-pub struct BruteForcePlaceIndex {
+pub struct QuadtreePlaceIndex {
     places: Vec<Place>,
     bboxes: Vec<BBox>,
-    grid: HashMap<(i32, i32), Vec<usize>>,
-    cell_dlat: f64,
-    cell_dlon: f64,
+    tree: BBoxQuadtree,
     join_radius_m: f64,
 }
 
-impl BruteForcePlaceIndex {
+impl QuadtreePlaceIndex {
     /// Index a place list for joining.
     #[must_use]
     pub fn new(places: Vec<Place>, config: &Config) -> Self {
         let join_radius_m = config.join_radius_m;
-        let ref_lat = if places.is_empty() {
-            0.0
-        } else {
-            places.iter().map(|p| p.centroid.lat).sum::<f64>() / places.len() as f64
-        };
-        let cell_m = join_radius_m.max(250.0);
-        let (cell_dlat, cell_dlon) = meters_to_degrees(ref_lat, cell_m);
-
         let mut bboxes = Vec::with_capacity(places.len());
-        let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-        for (idx, place) in places.iter().enumerate() {
+        for place in &places {
             let bbox = BBox::from_ring(&place.polygon, join_radius_m).unwrap_or(BBox {
                 min_lat: place.centroid.lat,
                 max_lat: place.centroid.lat,
                 min_lon: place.centroid.lon,
                 max_lon: place.centroid.lon,
             });
-            insert_bbox_cells(&mut grid, bbox, idx, cell_dlat, cell_dlon);
             bboxes.push(bbox);
         }
-
+        let tree = BBoxQuadtree::build(&bboxes);
         Self {
             places,
             bboxes,
-            grid,
-            cell_dlat,
-            cell_dlon,
+            tree,
             join_radius_m,
         }
     }
@@ -100,7 +83,7 @@ impl BruteForcePlaceIndex {
     }
 }
 
-impl PlaceIndex for BruteForcePlaceIndex {
+impl PlaceIndex for QuadtreePlaceIndex {
     fn candidates(&self, cluster: &Cluster) -> Vec<Place> {
         if self.places.is_empty() {
             return Vec::new();
@@ -112,13 +95,12 @@ impl PlaceIndex for BruteForcePlaceIndex {
             return Vec::new();
         };
 
+        let mut hits = Vec::new();
+        self.tree.query(query_bbox, &mut hits);
+
         let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for idx in cells_overlapping(query_bbox, self.cell_dlat, self.cell_dlon)
-            .filter_map(|key| self.grid.get(&key))
-            .flatten()
-            .copied()
-        {
+        for idx in hits {
             if !seen.insert(idx) {
                 continue;
             }
@@ -135,15 +117,13 @@ impl PlaceIndex for BruteForcePlaceIndex {
     }
 }
 
-/// Factory for the default uniform-grid place index.
-///
-/// See [`BruteForcePlaceIndex`] for scaling limits.
+/// Factory for the default bbox-quadtree place index.
 #[derive(Debug, Clone)]
-pub struct BruteForcePlaceIndexFactory {
+pub struct QuadtreePlaceIndexFactory {
     config: Config,
 }
 
-impl BruteForcePlaceIndexFactory {
+impl QuadtreePlaceIndexFactory {
     /// Create a factory from pipeline configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
@@ -151,11 +131,11 @@ impl BruteForcePlaceIndexFactory {
     }
 }
 
-impl PlaceIndexFactory for BruteForcePlaceIndexFactory {
-    type Index = BruteForcePlaceIndex;
+impl PlaceIndexFactory for QuadtreePlaceIndexFactory {
+    type Index = QuadtreePlaceIndex;
 
     fn create(&self, places: &[Place]) -> Self::Index {
-        BruteForcePlaceIndex::new(places.to_vec(), &self.config)
+        QuadtreePlaceIndex::new(places.to_vec(), &self.config)
     }
 }
 
@@ -165,36 +145,6 @@ fn within_join_radius(cluster: &Cluster, place: &Place, radius: f64) -> bool {
             .pings
             .iter()
             .any(|ping| distance_to_polygon_m(ping.point, &place.polygon) <= radius)
-}
-
-fn insert_bbox_cells(
-    grid: &mut HashMap<(i32, i32), Vec<usize>>,
-    bbox: BBox,
-    idx: usize,
-    cell_dlat: f64,
-    cell_dlon: f64,
-) {
-    let i0 = (bbox.min_lat / cell_dlat).floor() as i32;
-    let i1 = (bbox.max_lat / cell_dlat).floor() as i32;
-    let j0 = (bbox.min_lon / cell_dlon).floor() as i32;
-    let j1 = (bbox.max_lon / cell_dlon).floor() as i32;
-    for i in i0..=i1 {
-        for j in j0..=j1 {
-            grid.entry((i, j)).or_default().push(idx);
-        }
-    }
-}
-
-fn cells_overlapping(
-    bbox: BBox,
-    cell_dlat: f64,
-    cell_dlon: f64,
-) -> impl Iterator<Item = (i32, i32)> {
-    let i0 = (bbox.min_lat / cell_dlat).floor() as i32;
-    let i1 = (bbox.max_lat / cell_dlat).floor() as i32;
-    let j0 = (bbox.min_lon / cell_dlon).floor() as i32;
-    let j1 = (bbox.max_lon / cell_dlon).floor() as i32;
-    (i0..=i1).flat_map(move |i| (j0..=j1).map(move |j| (i, j)))
 }
 
 fn cluster_probe_ring(cluster: &Cluster, radius_m: f64) -> Vec<Point> {
@@ -260,7 +210,7 @@ mod tests {
     fn finds_nearby_place() {
         let cfg = Config::default();
         let place = square(7, 0.0, 0.0);
-        let factory = BruteForcePlaceIndexFactory::new(cfg);
+        let factory = QuadtreePlaceIndexFactory::new(cfg);
         let index = factory.create(&[place]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
@@ -273,10 +223,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_catalog_yields_no_candidates() {
+        let index = QuadtreePlaceIndexFactory::new(Config::default()).create(&[]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0, 0.0, 0.0, 5.0),
+            GpsPing::new(0.0, 0.0, 10.0, 5.0),
+        ])
+        .unwrap();
+        assert!(index.candidates(&cluster).is_empty());
+    }
+
+    #[test]
     fn concave_notch_farther_than_radius_is_not_a_candidate() {
         // Small radius so the open notch (~55 m from the inner corner) is outside.
         let cfg = Config::builder().join_radius_m(10.0).build().unwrap();
-        let index = BruteForcePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0015, 0.0015, 0.0, 5.0),
             GpsPing::new(0.00155, 0.0015, 10.0, 5.0),
@@ -288,7 +249,7 @@ mod tests {
     #[test]
     fn point_near_l_arm_within_radius_is_candidate() {
         let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
-        let index = BruteForcePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
         // ~5–6 m east of the horizontal bar (0.00005° ≈ 5.5 m).
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.00205, 0.0005, 0.0, 5.0),
@@ -301,17 +262,42 @@ mod tests {
     }
 
     #[test]
-    fn grid_still_finds_nearby_among_many_far_places() {
+    fn finds_nearby_among_many_far_places() {
         let cfg = Config::default();
         let mut places = vec![square(1, 0.0, 0.0)];
         for i in 0u32..200 {
             let offset = 1.0 + f64::from(i) * 0.01;
             places.push(square(u64::from(i) + 2, offset, offset));
         }
-        let index = BruteForcePlaceIndexFactory::new(cfg).create(&places);
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&places);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
             GpsPing::new(0.00055, 0.0005, 20.0, 10.0),
+        ])
+        .unwrap();
+        let cands = index.candidates(&cluster);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].id, 1);
+    }
+
+    #[test]
+    fn dense_local_catalog_still_returns_only_nearby_match() {
+        let cfg = Config::builder().join_radius_m(30.0).build().unwrap();
+        let mut places = vec![square(1, 0.0, 0.0)];
+        // Pack many places in a tight metro-scale neighborhood (~1 km steps).
+        for i in 0u32..64 {
+            let row = f64::from(i / 8);
+            let col = f64::from(i % 8);
+            places.push(square(
+                u64::from(i) + 2,
+                0.01 + row * 0.01,
+                0.01 + col * 0.01,
+            ));
+        }
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&places);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
+            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
         ])
         .unwrap();
         let cands = index.candidates(&cluster);

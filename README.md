@@ -95,10 +95,10 @@ cargo run --example basic
 
 ## Limitations
 
-The default place join uses a **uniform degree hash grid** over place bounding
-boxes (not an R-tree or other hierarchical spatial index). That is fine for
-moderate or geographically sparse catalogs. Dense metro-scale POI sets may need
-a custom `PlaceIndex` wired through `with_parts`.
+The default place join prunes with a **bbox quadtree**, then confirms candidates
+by polygon distance. Cost still scales with how many places fall in the local
+query neighborhood. Specialized catalogs can supply a custom `PlaceIndex` via
+`with_parts`.
 
 ## Model persistence
 

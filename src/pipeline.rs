@@ -4,7 +4,7 @@ use crate::clean::{DefaultPingCleaner, PingCleaner};
 use crate::cluster::{Clusterer, TwoPassClusterer};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::join::{BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory};
+use crate::join::{PlaceIndex, PlaceIndexFactory, QuadtreePlaceIndexFactory};
 use crate::rank::{visit_from_rank, GbdtRanker, Ranker};
 use crate::types::{Cluster, GpsPing, Place, Visit};
 
@@ -28,7 +28,7 @@ pub struct VisitAttributor<Cl, C, F, R> {
 }
 
 type DefaultAttributor =
-    VisitAttributor<DefaultPingCleaner, TwoPassClusterer, BruteForcePlaceIndexFactory, GbdtRanker>;
+    VisitAttributor<DefaultPingCleaner, TwoPassClusterer, QuadtreePlaceIndexFactory, GbdtRanker>;
 
 impl DefaultAttributor {
     /// Start a builder for the default stage implementations.
@@ -115,7 +115,7 @@ impl VisitAttributorBuilder {
         Ok(VisitAttributor {
             cleaner: DefaultPingCleaner::new(config.clone()),
             clusterer: TwoPassClusterer::new(config.clone()),
-            index_factory: BruteForcePlaceIndexFactory::new(config.clone()),
+            index_factory: QuadtreePlaceIndexFactory::new(config.clone()),
             ranker,
             config,
         })

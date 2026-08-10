@@ -83,6 +83,7 @@ mod geo;
 mod join;
 mod pipeline;
 mod rank;
+mod spatial;
 mod types;
 
 // Domain
@@ -109,4 +110,4 @@ pub use clean::{DefaultPingCleaner, PingCleaner};
 #[doc(inline)]
 pub use cluster::{Clusterer, TwoPassClusterer};
 #[doc(inline)]
-pub use join::{BruteForcePlaceIndexFactory, PlaceIndex, PlaceIndexFactory};
+pub use join::{PlaceIndex, PlaceIndexFactory, QuadtreePlaceIndexFactory};

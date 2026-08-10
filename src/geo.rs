@@ -242,6 +242,17 @@ impl BBox {
             && self.max_lon >= other.min_lon
     }
 
+    /// Axis-aligned union of two boxes.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            min_lat: self.min_lat.min(other.min_lat),
+            max_lat: self.max_lat.max(other.max_lat),
+            min_lon: self.min_lon.min(other.min_lon),
+            max_lon: self.max_lon.max(other.max_lon),
+        }
+    }
+
     /// Whether the point lies inside the box.
     #[must_use]
     pub fn contains_point(self, p: Point) -> bool {
