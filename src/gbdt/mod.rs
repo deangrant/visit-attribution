@@ -1,5 +1,7 @@
 //! In-crate gradient-boosted decision trees for preference scores.
 
+mod format;
+
 use std::fs;
 use std::path::Path;
 
@@ -124,15 +126,27 @@ impl GbdtModel {
             let mut residuals = Vec::with_capacity(indices.len());
             let mut sample_x = Vec::with_capacity(indices.len());
             for &i in &indices {
-                let p = sigmoid(preds[i]);
+                let Some(&pred) = preds.get(i) else {
+                    continue;
+                };
+                let Some(&y) = ys.get(i) else {
+                    continue;
+                };
+                let Some(row) = xs.get(i) else {
+                    continue;
+                };
+                let p = sigmoid(pred);
                 // Map ±1 labels to {0,1} for the logistic residual.
-                let y01 = if ys[i] > 0.0 { 1.0 } else { 0.0 };
+                let y01 = if y > 0.0 { 1.0 } else { 0.0 };
                 residuals.push(y01 - p);
-                sample_x.push(xs[i].clone());
+                sample_x.push(row.clone());
             }
             let tree = build_tree(&sample_x, &residuals, config, 0);
             for (i, row) in xs.iter().enumerate() {
-                preds[i] += config.learning_rate * eval_tree(&tree, row)?;
+                let Some(pred) = preds.get_mut(i) else {
+                    continue;
+                };
+                *pred += config.learning_rate * eval_tree(&tree, row)?;
             }
             trees.push(tree);
         }
@@ -186,101 +200,11 @@ impl GbdtModel {
     }
 
     fn to_string_format(&self) -> String {
-        let mut out = String::new();
-        out.push_str("VA_GBDT 1\n");
-        out.push_str("base ");
-        out.push_str(&self.base_score.to_string());
-        out.push('\n');
-        out.push_str("lr ");
-        out.push_str(&self.learning_rate.to_string());
-        out.push('\n');
-        out.push_str("dim ");
-        out.push_str(&self.schema.dim().to_string());
-        out.push('\n');
-        out.push_str("naics");
-        for code in &self.schema.naics4 {
-            out.push(' ');
-            out.push_str(&code.to_string());
-        }
-        out.push('\n');
-        out.push_str("trees ");
-        out.push_str(&self.trees.len().to_string());
-        out.push('\n');
-        for tree in &self.trees {
-            write_node(&mut out, tree);
-            out.push('\n');
-        }
-        out
+        format::to_string_format(self)
     }
 
     fn from_string_format(text: &str) -> Result<Self> {
-        if text.len() > MAX_MODEL_BYTES {
-            return Err(Error::Model(format!(
-                "model text length {} exceeds limit {MAX_MODEL_BYTES}",
-                text.len()
-            )));
-        }
-        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-        let header = lines.next().ok_or_else(|| Error::Model("empty model file".into()))?;
-        if header != "VA_GBDT 1" {
-            return Err(Error::Model(format!("unsupported header: {header}")));
-        }
-        let base_score = parse_keyed_f64(
-            lines.next().ok_or_else(|| Error::Model("missing base".into()))?,
-            "base",
-        )?;
-        let learning_rate = parse_keyed_f64(
-            lines.next().ok_or_else(|| Error::Model("missing lr".into()))?,
-            "lr",
-        )?;
-        let dim = parse_keyed_usize(
-            lines.next().ok_or_else(|| Error::Model("missing dim".into()))?,
-            "dim",
-        )?;
-        let naics_line = lines.next().ok_or_else(|| Error::Model("missing naics".into()))?;
-        let mut naics_parts = naics_line.split_whitespace();
-        if naics_parts.next() != Some("naics") {
-            return Err(Error::Model("expected naics line".into()));
-        }
-        let mut naics4 = Vec::new();
-        for part in naics_parts {
-            naics4
-                .push(part.parse::<u32>().map_err(|_| Error::Model(format!("bad naics: {part}")))?);
-        }
-        let schema = FeatureSchema { naics4 };
-        if dim != schema.dim() {
-            return Err(Error::Model(format!(
-                "dim {dim} does not match schema width {}",
-                schema.dim()
-            )));
-        }
-        let n_trees = parse_keyed_usize(
-            lines.next().ok_or_else(|| Error::Model("missing trees".into()))?,
-            "trees",
-        )?;
-        if n_trees > MAX_TREES {
-            return Err(Error::Model(format!(
-                "trees {n_trees} exceeds limit {MAX_TREES}"
-            )));
-        }
-        let mut trees = Vec::with_capacity(n_trees);
-        for _ in 0..n_trees {
-            let line = lines.next().ok_or_else(|| Error::Model("missing tree line".into()))?;
-            let mut toks = line.split_whitespace().peekable();
-            let mut nodes = 0usize;
-            let tree = parse_node(&mut toks, 0, &mut nodes)?;
-            if toks.next().is_some() {
-                return Err(Error::Model("trailing tokens on tree line".into()));
-            }
-            validate_node(&tree, dim)?;
-            trees.push(tree);
-        }
-        Ok(Self {
-            schema,
-            base_score,
-            learning_rate,
-            trees,
-        })
+        format::from_string_format(text)
     }
 }
 
@@ -297,19 +221,17 @@ fn mean(values: &[f64]) -> f64 {
 }
 
 fn build_tree(xs: &[Vec<f64>], ys: &[f64], config: &TrainConfig, depth: usize) -> Node {
-    if xs.len() < config.min_leaf * 2
-        || depth >= config.max_depth
-        || ys.iter().all(|&y| (y - ys[0]).abs() < 1e-12)
-    {
+    let all_equal = ys.first().is_some_and(|&y0| ys.iter().all(|&y| (y - y0).abs() < 1e-12));
+    if xs.len() < config.min_leaf * 2 || depth >= config.max_depth || all_equal {
         return Node::Leaf { value: mean(ys) };
     }
     let Some((feature, threshold, left_idx, right_idx)) = best_split(xs, ys, config) else {
         return Node::Leaf { value: mean(ys) };
     };
-    let left_xs: Vec<Vec<f64>> = left_idx.iter().map(|&i| xs[i].clone()).collect();
-    let left_ys: Vec<f64> = left_idx.iter().map(|&i| ys[i]).collect();
-    let right_xs: Vec<Vec<f64>> = right_idx.iter().map(|&i| xs[i].clone()).collect();
-    let right_ys: Vec<f64> = right_idx.iter().map(|&i| ys[i]).collect();
+    let left_xs: Vec<Vec<f64>> = left_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
+    let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
+    let right_xs: Vec<Vec<f64>> = right_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
+    let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
     Node::Branch {
         feature,
         threshold,
@@ -323,11 +245,11 @@ fn best_split(
     ys: &[f64],
     config: &TrainConfig,
 ) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
-    let dim = xs[0].len();
+    let dim = xs.first()?.len();
     let mut best_gain = 0.0;
     let mut best = None;
     for f in 0..dim {
-        let mut vals: Vec<f64> = xs.iter().map(|r| r[f]).collect();
+        let mut vals: Vec<f64> = xs.iter().filter_map(|r| r.get(f).copied()).collect();
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         vals.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
         if vals.len() < 2 {
@@ -341,7 +263,10 @@ fn best_split(
             let mut left_idx = Vec::new();
             let mut right_idx = Vec::new();
             for (i, row) in xs.iter().enumerate() {
-                if row[f] <= threshold {
+                let Some(&value) = row.get(f) else {
+                    continue;
+                };
+                if value <= threshold {
                     left_idx.push(i);
                 } else {
                     right_idx.push(i);
@@ -351,8 +276,8 @@ fn best_split(
                 continue;
             }
             let parent_var = variance(ys);
-            let left_ys: Vec<f64> = left_idx.iter().map(|&i| ys[i]).collect();
-            let right_ys: Vec<f64> = right_idx.iter().map(|&i| ys[i]).collect();
+            let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
+            let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
             let gain = parent_var
                 - (left_ys.len() as f64 * variance(&left_ys)
                     + right_ys.len() as f64 * variance(&right_ys))
@@ -398,134 +323,21 @@ fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
     }
 }
 
-fn validate_node(node: &Node, dim: usize) -> Result<()> {
-    match node {
-        Node::Leaf { .. } => Ok(()),
-        Node::Branch {
-            feature,
-            left,
-            right,
-            ..
-        } => {
-            if *feature >= dim {
-                return Err(Error::Model(format!(
-                    "tree feature index {feature} out of range for dim {dim}"
-                )));
-            }
-            validate_node(left, dim)?;
-            validate_node(right, dim)
-        }
-    }
-}
-
-fn write_node(out: &mut String, node: &Node) {
-    match node {
-        Node::Leaf { value } => {
-            out.push('L');
-            out.push(' ');
-            out.push_str(&value.to_string());
-        }
-        Node::Branch {
-            feature,
-            threshold,
-            left,
-            right,
-        } => {
-            out.push('B');
-            out.push(' ');
-            out.push_str(&feature.to_string());
-            out.push(' ');
-            out.push_str(&threshold.to_string());
-            out.push(' ');
-            write_node(out, left);
-            out.push(' ');
-            write_node(out, right);
-        }
-    }
-}
-
-fn parse_node<'a>(
-    toks: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
-    depth: usize,
-    nodes: &mut usize,
-) -> Result<Node> {
-    *nodes += 1;
-    if *nodes > MAX_NODES_PER_TREE {
-        return Err(Error::Model(format!(
-            "tree exceeds node limit {MAX_NODES_PER_TREE}"
-        )));
-    }
-    let tag = toks.next().ok_or_else(|| Error::Model("unexpected end of tree".into()))?;
-    match tag {
-        "L" => {
-            let value = toks
-                .next()
-                .ok_or_else(|| Error::Model("missing leaf value".into()))?
-                .parse::<f64>()
-                .map_err(|_| Error::Model("bad leaf value".into()))?;
-            Ok(Node::Leaf { value })
-        }
-        "B" => {
-            if depth >= MAX_TREE_DEPTH {
-                return Err(Error::Model(format!(
-                    "tree depth exceeds limit {MAX_TREE_DEPTH}"
-                )));
-            }
-            let feature = toks
-                .next()
-                .ok_or_else(|| Error::Model("missing feature".into()))?
-                .parse::<usize>()
-                .map_err(|_| Error::Model("bad feature".into()))?;
-            let threshold = toks
-                .next()
-                .ok_or_else(|| Error::Model("missing threshold".into()))?
-                .parse::<f64>()
-                .map_err(|_| Error::Model("bad threshold".into()))?;
-            let left = Box::new(parse_node(toks, depth + 1, nodes)?);
-            let right = Box::new(parse_node(toks, depth + 1, nodes)?);
-            Ok(Node::Branch {
-                feature,
-                threshold,
-                left,
-                right,
-            })
-        }
-        other => Err(Error::Model(format!("unknown node tag: {other}"))),
-    }
-}
-
-fn parse_keyed_f64(line: &str, key: &str) -> Result<f64> {
-    let mut parts = line.split_whitespace();
-    if parts.next() != Some(key) {
-        return Err(Error::Model(format!("expected key {key}")));
-    }
-    parts
-        .next()
-        .ok_or_else(|| Error::Model(format!("missing value for {key}")))?
-        .parse::<f64>()
-        .map_err(|_| Error::Model(format!("bad f64 for {key}")))
-}
-
-fn parse_keyed_usize(line: &str, key: &str) -> Result<usize> {
-    let mut parts = line.split_whitespace();
-    if parts.next() != Some(key) {
-        return Err(Error::Model(format!("expected key {key}")));
-    }
-    parts
-        .next()
-        .ok_or_else(|| Error::Model(format!("missing value for {key}")))?
-        .parse::<usize>()
-        .map_err(|_| Error::Model(format!("bad usize for {key}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn row4(first: f64) -> Vec<f64> {
         let mut v = vec![0.0; 28]; // empty-naics schema dim = 4 + 24 UNK
-        v[0] = first;
+        if let Some(slot) = v.get_mut(0) {
+            *slot = first;
+        }
         v
+    }
+
+    /// Minimal single-leaf model text for rejection fixtures.
+    fn leaf_model_text(header: &str, dim: usize, n_trees: usize, trees: &str) -> String {
+        format!("{header}\nbase 0\nlr 0.1\ndim {dim}\nnaics\ntrees {n_trees}\n{trees}\n")
     }
 
     #[test]
@@ -535,45 +347,33 @@ mod tests {
         let xs = vec![row4(2.0), row4(1.0), row4(-2.0), row4(-1.0)];
         let ys = vec![1.0, 1.0, -1.0, -1.0];
         let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        assert!(model.predict_raw(&xs[0]).unwrap() > 0.0);
-        assert!(model.predict_raw(&xs[2]).unwrap() < 0.0);
+        assert!(model.predict_raw(xs.first().unwrap()).unwrap() > 0.0);
+        assert!(model.predict_raw(xs.get(2).unwrap()).unwrap() < 0.0);
         let text = model.to_string_format();
         let loaded = GbdtModel::from_string_format(&text).unwrap();
         assert!(
-            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs() < 1e-9
+            (loaded.predict_raw(xs.first().unwrap()).unwrap()
+                - model.predict_raw(xs.first().unwrap()).unwrap())
+            .abs()
+                < 1e-9
         );
+    }
+
+    fn assert_model_err(text: &str) {
+        let err = GbdtModel::from_string_format(text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
     }
 
     #[test]
     fn load_rejects_dim_mismatch_with_schema() {
         // Empty naics ⇒ schema.dim() == 4 + 24 (UNK); claim dim 99.
-        let text = "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 99
-naics
-trees 1
-L 0
-";
-        let err = GbdtModel::from_string_format(text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 99, 1, "L 0"));
     }
 
     #[test]
     fn load_rejects_out_of_range_feature_index() {
         // Empty naics ⇒ dim 28; branch splits on feature 40.
-        let text = "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 28
-naics
-trees 1
-B 40 0 L 1 L -1
-";
-        let err = GbdtModel::from_string_format(text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 40 0 L 1 L -1"));
     }
 
     #[test]
@@ -588,20 +388,8 @@ B 40 0 L 1 L -1
 
     #[test]
     fn load_rejects_too_many_trees() {
-        let text = format!(
-            "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 28
-naics
-trees {}
-L 0
-",
-            MAX_TREES + 1
-        );
-        let err = GbdtModel::from_string_format(&text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        // MAX_TREES is 256.
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 257, "L 0"));
     }
 
     #[test]
@@ -614,37 +402,14 @@ L 0
         for _ in 0..=MAX_TREE_DEPTH {
             tree.push_str(" L 0");
         }
-        let text = format!(
-            "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 28
-naics
-trees 1
-{tree}
-"
-        );
-        let err = GbdtModel::from_string_format(&text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, &tree));
     }
 
     #[test]
     fn load_rejects_oversized_model_text() {
-        let mut text = String::from(
-            "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 28
-naics
-trees 1
-L 0
-",
-        );
+        let mut text = leaf_model_text("VA_GBDT 1", 28, 1, "L 0");
         text.push_str(&"x".repeat(MAX_MODEL_BYTES));
-        let err = GbdtModel::from_string_format(&text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&text);
     }
 
     #[test]
@@ -662,32 +427,12 @@ L 0
 
     #[test]
     fn load_rejects_wrong_header() {
-        let text = "\
-VA_GBDT 2
-base 0
-lr 0.1
-dim 28
-naics
-trees 1
-L 0
-";
-        let err = GbdtModel::from_string_format(text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&leaf_model_text("VA_GBDT 2", 28, 1, "L 0"));
     }
 
     #[test]
     fn load_rejects_truncated_tree_lines() {
-        let text = "\
-VA_GBDT 1
-base 0
-lr 0.1
-dim 28
-naics
-trees 2
-L 0
-";
-        let err = GbdtModel::from_string_format(text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 2, "L 0"));
     }
 
     #[test]
@@ -708,7 +453,10 @@ L 0
         let loaded = GbdtModel::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
-            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs() < 1e-9
+            (loaded.predict_raw(xs.first().unwrap()).unwrap()
+                - model.predict_raw(xs.first().unwrap()).unwrap())
+            .abs()
+                < 1e-9
         );
     }
 }

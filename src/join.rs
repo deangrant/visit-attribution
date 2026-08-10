@@ -104,8 +104,12 @@ impl PlaceIndex for QuadtreePlaceIndex {
             if !seen.insert(idx) {
                 continue;
             }
-            let place = &self.places[idx];
-            let bbox = self.bboxes[idx];
+            let Some(place) = self.places.get(idx) else {
+                continue;
+            };
+            let Some(&bbox) = self.bboxes.get(idx) else {
+                continue;
+            };
             if !bbox.intersects(query_bbox) {
                 continue;
             }
@@ -166,18 +170,7 @@ mod tests {
     use crate::types::{GpsPing, PlaceId};
 
     fn square(id: PlaceId, lat0: f64, lon0: f64) -> Place {
-        Place::new(
-            id,
-            vec![
-                Point::new(lat0, lon0),
-                Point::new(lat0, lon0 + 0.001),
-                Point::new(lat0 + 0.001, lon0 + 0.001),
-                Point::new(lat0 + 0.001, lon0),
-                Point::new(lat0, lon0),
-            ],
-            Point::new(lat0 + 0.0005, lon0 + 0.0005),
-            Some(445_110),
-        )
+        Place::square(id, lat0, lon0, 0.001, Some(445_110))
     }
 
     /// L-shaped footprint with a concave notch in the upper-right.
@@ -198,85 +191,101 @@ mod tests {
         )
     }
 
+    fn two_ping_cluster(lat: f64, lon: f64, ha: f64) -> Cluster {
+        Cluster::from_pings(vec![
+            GpsPing::new(lat, lon, 0.0, ha),
+            GpsPing::new(lat + 0.00005, lon, 10.0, ha),
+        ])
+        .unwrap()
+    }
+
+    fn candidates_for(cfg: Config, places: &[Place], cluster: &Cluster) -> Vec<Place> {
+        QuadtreePlaceIndexFactory::new(cfg).create(places).candidates(cluster)
+    }
+
+    fn assert_no_candidates(cfg: Config, places: &[Place], cluster: &Cluster) {
+        assert!(candidates_for(cfg, places, cluster).is_empty());
+    }
+
+    fn assert_one_candidate(cands: &[Place], id: PlaceId) {
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands.first().map(|p| p.id), Some(id));
+    }
+
+    fn join_cfg(radius_m: f64) -> Config {
+        Config::builder().join_radius_m(radius_m).build().unwrap()
+    }
+
     #[test]
     fn finds_nearby_place() {
-        let cfg = Config::default();
         let place = square(7, 0.0, 0.0);
-        let factory = QuadtreePlaceIndexFactory::new(cfg);
-        let index = factory.create(&[place]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
-            GpsPing::new(0.0006, 0.0005, 30.0, 10.0),
-        ])
-        .unwrap();
-        let cands = index.candidates(&cluster);
-        assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].id, 7);
+        let cluster = two_ping_cluster(0.0005, 0.0005, 10.0);
+        assert_one_candidate(&candidates_for(Config::default(), &[place], &cluster), 7);
     }
 
     #[test]
     fn empty_catalog_yields_no_candidates() {
-        let index = QuadtreePlaceIndexFactory::new(Config::default()).create(&[]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0, 0.0, 0.0, 5.0),
-            GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ])
-        .unwrap();
-        assert!(index.candidates(&cluster).is_empty());
+        assert_no_candidates(Config::default(), &[], &two_ping_cluster(0.0, 0.0, 5.0));
     }
 
     #[test]
-    fn concave_notch_farther_than_radius_is_not_a_candidate() {
-        // Small radius so the open notch (~55 m from the inner corner) is outside.
-        let cfg = Config::builder().join_radius_m(10.0).build().unwrap();
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0015, 0.0015, 0.0, 5.0),
-            GpsPing::new(0.00155, 0.0015, 10.0, 5.0),
-        ])
-        .unwrap();
-        assert!(index.candidates(&cluster).is_empty());
+    fn radius_and_geometry_negative_cases() {
+        assert_no_candidates(
+            join_cfg(10.0),
+            &[l_shape(1)],
+            &two_ping_cluster(0.0015, 0.0015, 5.0),
+        );
+        assert_no_candidates(
+            join_cfg(20.0),
+            &[square(1, 0.0, 0.0)],
+            &two_ping_cluster(0.0005, 0.002, 5.0),
+        );
+        let empty = Place::new(1, vec![], Point::new(0.0005, 0.0005), None);
+        assert_no_candidates(
+            join_cfg(50.0),
+            &[empty],
+            &two_ping_cluster(0.0005, 0.0005, 5.0),
+        );
     }
 
     #[test]
-    fn point_near_l_arm_within_radius_is_candidate() {
-        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
-        // ~5–6 m east of the horizontal bar (0.00005° ≈ 5.5 m).
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.00205, 0.0005, 0.0, 5.0),
-            GpsPing::new(0.00206, 0.0005, 10.0, 5.0),
-        ])
-        .unwrap();
-        let cands = index.candidates(&cluster);
-        assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].id, 1);
+    fn radius_and_accuracy_positive_cases() {
+        assert_one_candidate(
+            &candidates_for(
+                join_cfg(50.0),
+                &[l_shape(1)],
+                &two_ping_cluster(0.00205, 0.0005, 5.0),
+            ),
+            1,
+        );
+        assert_one_candidate(
+            &candidates_for(
+                join_cfg(20.0),
+                &[square(1, 0.0, 0.0)],
+                &two_ping_cluster(0.0005, 0.002, 200.0),
+            ),
+            1,
+        );
     }
 
     #[test]
     fn finds_nearby_among_many_far_places() {
-        let cfg = Config::default();
         let mut places = vec![square(1, 0.0, 0.0)];
         for i in 0u32..200 {
             let offset = 1.0 + f64::from(i) * 0.01;
             places.push(square(u64::from(i) + 2, offset, offset));
         }
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&places);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
-            GpsPing::new(0.00055, 0.0005, 20.0, 10.0),
-        ])
-        .unwrap();
-        let cands = index.candidates(&cluster);
-        assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].id, 1);
+        let cands = candidates_for(
+            Config::default(),
+            &places,
+            &two_ping_cluster(0.0005, 0.0005, 10.0),
+        );
+        assert_one_candidate(&cands, 1);
     }
 
     #[test]
     fn dense_local_catalog_still_returns_only_nearby_match() {
-        let cfg = Config::builder().join_radius_m(30.0).build().unwrap();
         let mut places = vec![square(1, 0.0, 0.0)];
-        // Pack many places in a tight metro-scale neighborhood (~1 km steps).
         for i in 0u32..64 {
             let row = f64::from(i / 8);
             let col = f64::from(i % 8);
@@ -286,72 +295,23 @@ mod tests {
                 0.01 + col * 0.01,
             ));
         }
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&places);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
-            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
-        ])
-        .unwrap();
-        let cands = index.candidates(&cluster);
-        assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].id, 1);
-    }
-
-    #[test]
-    fn place_outside_join_radius_is_not_a_candidate() {
-        let cfg = Config::builder().join_radius_m(20.0).build().unwrap();
-        // ~111 m east of the place square at lon 0..0.001.
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[square(1, 0.0, 0.0)]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.002, 0.0, 5.0),
-            GpsPing::new(0.0005, 0.0021, 10.0, 5.0),
-        ])
-        .unwrap();
-        assert!(index.candidates(&cluster).is_empty());
-    }
-
-    #[test]
-    fn empty_polygon_indexes_via_centroid_bbox() {
-        // Empty ring falls back to a centroid point bbox for indexing; distance
-        // to an empty ring is infinite, so the place is not a join candidate.
-        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
-        let empty = Place::new(1, vec![], Point::new(0.0005, 0.0005), None);
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[empty]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
-            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
-        ])
-        .unwrap();
-        assert!(index.candidates(&cluster).is_empty());
-    }
-
-    #[test]
-    fn large_horizontal_accuracy_expands_join_radius() {
-        let cfg = Config::builder().join_radius_m(20.0).build().unwrap();
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[square(1, 0.0, 0.0)]);
-        // Same geometry as outside-radius case, but HA widens effective radius.
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.002, 0.0, 200.0),
-            GpsPing::new(0.0005, 0.0021, 10.0, 200.0),
-        ])
-        .unwrap();
-        let cands = index.candidates(&cluster);
-        assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].id, 1);
+        let cands = candidates_for(
+            join_cfg(30.0),
+            &places,
+            &two_ping_cluster(0.0005, 0.0005, 5.0),
+        );
+        assert_one_candidate(&cands, 1);
     }
 
     #[test]
     fn overlapping_places_both_returned() {
-        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
         let a = square(1, 0.0, 0.0);
         let b = square(2, 0.0002, 0.0002);
-        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[a, b]);
-        let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
-            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
-        ])
-        .unwrap();
-        let mut cands = index.candidates(&cluster);
+        let mut cands = candidates_for(
+            join_cfg(50.0),
+            &[a, b],
+            &two_ping_cluster(0.0005, 0.0005, 5.0),
+        );
         cands.sort_by_key(|p| p.id);
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0].id, 1);

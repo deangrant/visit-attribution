@@ -30,8 +30,12 @@ fn ensure_closed(ring: &[Point]) -> Vec<Point> {
         return Vec::new();
     }
     let mut out = ring.to_vec();
-    let first = out[0];
-    let last = out[out.len() - 1];
+    let Some(&first) = out.first() else {
+        return out;
+    };
+    let Some(&last) = out.last() else {
+        return out;
+    };
     if (first.lat - last.lat).abs() > f64::EPSILON || (first.lon - last.lon).abs() > f64::EPSILON {
         out.push(first);
     }
@@ -52,12 +56,11 @@ pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
         return true;
     }
     let mut inside = false;
-    let mut j = ring.len() - 1;
-    for i in 0..ring.len() - 1 {
-        let pi = ring[i];
-        let pj = ring[j];
+    for window in ring.windows(2) {
+        let [pi, pj] = window else {
+            continue;
+        };
         if (pi.lat - pj.lat).abs() < f64::EPSILON {
-            j = i;
             continue;
         }
         let intersect = ((pi.lat > point.lat) != (pj.lat > point.lat))
@@ -65,7 +68,6 @@ pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
         if intersect {
             inside = !inside;
         }
-        j = i;
     }
     inside
 }
@@ -88,7 +90,12 @@ fn point_on_segment(p: Point, a: Point, b: Point) -> bool {
 }
 
 fn point_on_ring_edge(point: Point, ring: &[Point]) -> bool {
-    ring.windows(2).any(|ab| point_on_segment(point, ab[0], ab[1]))
+    ring.windows(2).any(|window| {
+        let [a, b] = window else {
+            return false;
+        };
+        point_on_segment(point, *a, *b)
+    })
 }
 
 fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
@@ -130,8 +137,11 @@ pub fn distance_to_polygon_m(point: Point, ring: &[Point]) -> f64 {
         return f64::INFINITY;
     }
     let mut best = f64::INFINITY;
-    for i in 0..ring.len() - 1 {
-        best = best.min(dist_point_segment_m(point, ring[i], ring[i + 1]));
+    for window in ring.windows(2) {
+        let [a, b] = window else {
+            continue;
+        };
+        best = best.min(dist_point_segment_m(point, *a, *b));
     }
     best
 }
@@ -147,11 +157,14 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
     let mean_lat = ring.iter().map(|p| p.lat).sum::<f64>() / (ring.len() as f64);
     let (mx, my) = meters_to_degrees(mean_lat, 1.0);
     let mut area = 0.0;
-    for i in 0..ring.len() - 1 {
-        let x1 = ring[i].lon / my;
-        let y1 = ring[i].lat / mx;
-        let x2 = ring[i + 1].lon / my;
-        let y2 = ring[i + 1].lat / mx;
+    for window in ring.windows(2) {
+        let [p1, p2] = window else {
+            continue;
+        };
+        let x1 = p1.lon / my;
+        let y1 = p1.lat / mx;
+        let x2 = p2.lon / my;
+        let y2 = p2.lat / mx;
         area += x1 * y2 - x2 * y1;
     }
     area.abs() * 0.5

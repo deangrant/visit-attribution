@@ -112,69 +112,9 @@ impl ConfigBuilder {
         Self::default()
     }
 
-    /// Set the maximum accepted horizontal accuracy in meters.
-    pub fn max_horizontal_accuracy_m(mut self, v: f64) -> Self {
-        self.config.max_horizontal_accuracy_m = v;
-        self
-    }
-
-    /// Set the maximum implied speed between consecutive pings (m/s).
-    pub fn max_speed_m_s(mut self, v: f64) -> Self {
-        self.config.max_speed_m_s = v;
-        self
-    }
-
-    /// Set max `path/net` for a window to count as linear (`<=` this value).
-    pub fn linearity_threshold(mut self, v: f64) -> Self {
-        self.config.linearity_threshold = v;
-        self
-    }
-
-    /// Set the minimum window duration for the linearity filter (seconds).
-    pub fn linearity_window_s(mut self, v: f64) -> Self {
-        self.config.linearity_window_s = v;
-        self
-    }
-
-    /// Set the minimum speed (m/s) that marks a linear window as driving.
-    pub fn driving_speed_m_s(mut self, v: f64) -> Self {
-        self.config.driving_speed_m_s = v;
-        self
-    }
-
-    /// Set the neighbor distance threshold for density clustering (meters).
-    pub fn dist_threshold_m(mut self, v: f64) -> Self {
-        self.config.dist_threshold_m = v;
-        self
-    }
-
-    /// Set the maximum jump from the last ping within a cluster (meters).
-    pub fn max_dist_threshold_m(mut self, v: f64) -> Self {
-        self.config.max_dist_threshold_m = v;
-        self
-    }
-
-    /// Set the max seconds between consecutive pings within a density cluster.
-    pub fn max_time_gap_s(mut self, v: f64) -> Self {
-        self.config.max_time_gap_s = v;
-        self
-    }
-
     /// Set the minimum number of pings required to form a cluster.
     pub fn min_cluster_pings(mut self, v: usize) -> Self {
         self.config.min_cluster_pings = v;
-        self
-    }
-
-    /// Set the area (m²) at which places use the large-POI clustering pass.
-    pub fn large_poi_area_m2(mut self, v: f64) -> Self {
-        self.config.large_poi_area_m2 = v;
-        self
-    }
-
-    /// Set the max distance (m) from a place polygon for join candidates.
-    pub fn join_radius_m(mut self, v: f64) -> Self {
-        self.config.join_radius_m = v;
         self
     }
 
@@ -188,6 +128,69 @@ impl ConfigBuilder {
         Ok(self.config)
     }
 }
+
+macro_rules! config_f64_setter {
+    ($name:ident, $field:ident, $doc:expr) => {
+        impl ConfigBuilder {
+            #[doc = $doc]
+            pub fn $name(mut self, v: f64) -> Self {
+                self.config.$field = v;
+                self
+            }
+        }
+    };
+}
+
+config_f64_setter!(
+    max_horizontal_accuracy_m,
+    max_horizontal_accuracy_m,
+    "Set the maximum accepted horizontal accuracy in meters."
+);
+config_f64_setter!(
+    max_speed_m_s,
+    max_speed_m_s,
+    "Set the maximum implied speed between consecutive pings (m/s)."
+);
+config_f64_setter!(
+    linearity_threshold,
+    linearity_threshold,
+    "Set max `path/net` for a window to count as linear (`<=` this value)."
+);
+config_f64_setter!(
+    linearity_window_s,
+    linearity_window_s,
+    "Set the minimum window duration for the linearity filter (seconds)."
+);
+config_f64_setter!(
+    driving_speed_m_s,
+    driving_speed_m_s,
+    "Set the minimum speed (m/s) that marks a linear window as driving."
+);
+config_f64_setter!(
+    dist_threshold_m,
+    dist_threshold_m,
+    "Set the neighbor distance threshold for density clustering (meters)."
+);
+config_f64_setter!(
+    max_dist_threshold_m,
+    max_dist_threshold_m,
+    "Set the maximum jump from the last ping within a cluster (meters)."
+);
+config_f64_setter!(
+    max_time_gap_s,
+    max_time_gap_s,
+    "Set the max seconds between consecutive pings within a density cluster."
+);
+config_f64_setter!(
+    large_poi_area_m2,
+    large_poi_area_m2,
+    "Set the area (m²) at which places use the large-POI clustering pass."
+);
+config_f64_setter!(
+    join_radius_m,
+    join_radius_m,
+    "Set the max distance (m) from a place polygon for join candidates."
+);
 
 #[cfg(test)]
 mod tests {

@@ -32,10 +32,16 @@ impl BBoxQuadtree {
         if bboxes.is_empty() {
             return Self { root: None };
         }
-        let mut root_bounds = bboxes[0];
-        for b in &bboxes[1..] {
-            root_bounds = root_bounds.union(*b);
-        }
+        let mut root_bounds = match bboxes.split_first() {
+            Some((first, rest)) => {
+                let mut bounds = *first;
+                for b in rest {
+                    bounds = bounds.union(*b);
+                }
+                bounds
+            }
+            None => return Self { root: None },
+        };
         root_bounds = ensure_extent(root_bounds);
         let mut root = QuadNode::Leaf {
             bounds: root_bounds,
@@ -116,24 +122,10 @@ fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
             let bounds = *bounds;
             let old = std::mem::take(indices);
             let quads = quadrants(bounds);
-            let mut children = [
-                QuadNode::Leaf {
-                    bounds: quads[0],
-                    indices: Vec::new(),
-                },
-                QuadNode::Leaf {
-                    bounds: quads[1],
-                    indices: Vec::new(),
-                },
-                QuadNode::Leaf {
-                    bounds: quads[2],
-                    indices: Vec::new(),
-                },
-                QuadNode::Leaf {
-                    bounds: quads[3],
-                    indices: Vec::new(),
-                },
-            ];
+            let mut children = quads.map(|bounds| QuadNode::Leaf {
+                bounds,
+                indices: Vec::new(),
+            });
             for old_idx in old {
                 insert_into_children(&mut children, old_idx, bboxes, depth);
             }
@@ -149,7 +141,9 @@ fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
 }
 
 fn insert_into_children(children: &mut [QuadNode; 4], idx: usize, bboxes: &[BBox], depth: u8) {
-    let item = bboxes[idx];
+    let Some(&item) = bboxes.get(idx) else {
+        return;
+    };
     let mut hit = false;
     for child in children.iter_mut() {
         if bounds_of(child).intersects(item) {
@@ -158,7 +152,9 @@ fn insert_into_children(children: &mut [QuadNode; 4], idx: usize, bboxes: &[BBox
         }
     }
     if !hit {
-        insert(&mut children[0], idx, bboxes, depth.saturating_add(1));
+        if let Some(first) = children.first_mut() {
+            insert(first, idx, bboxes, depth.saturating_add(1));
+        }
     }
 }
 

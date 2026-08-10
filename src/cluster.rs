@@ -52,9 +52,12 @@ impl LargePoiClusterer {
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
+            let Some(seed) = pings.get(i) else {
+                break;
+            };
             let place_id = large
                 .iter()
-                .filter(|place| point_in_polygon(pings[i].point, &place.polygon))
+                .filter(|place| point_in_polygon(seed.point, &place.polygon))
                 .min_by(|a, b| {
                     ring_area_m2(&a.polygon)
                         .partial_cmp(&ring_area_m2(&b.polygon))
@@ -69,22 +72,28 @@ impl LargePoiClusterer {
             let start = i;
             i += 1;
             while i < pings.len() {
-                let still = large.iter().any(|place| {
-                    place.id == pid && point_in_polygon(pings[i].point, &place.polygon)
-                });
+                let Some(cur) = pings.get(i) else {
+                    break;
+                };
+                let still = large
+                    .iter()
+                    .any(|place| place.id == pid && point_in_polygon(cur.point, &place.polygon));
                 if !still {
                     break;
                 }
                 i += 1;
             }
             if i - start >= self.config.min_cluster_pings {
-                for flag in &mut used[start..i] {
-                    *flag = true;
+                if let Some(flags) = used.get_mut(start..i) {
+                    for flag in flags {
+                        *flag = true;
+                    }
                 }
-                clusters.push(
-                    Cluster::from_pings(pings[start..i].to_vec())
-                        .expect("min_cluster_pings ensures non-empty"),
-                );
+                if let Some(slice) = pings.get(start..i) {
+                    if let Ok(cluster) = Cluster::from_pings(slice.to_vec()) {
+                        clusters.push(cluster);
+                    }
+                }
             }
         }
         (clusters, used)
@@ -126,11 +135,16 @@ impl Clusterer for TimeAwareDensityClusterer {
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
-            let mut members = vec![pings[i]];
-            let mut last = pings[i];
+            let Some(&seed) = pings.get(i) else {
+                break;
+            };
+            let mut members = vec![seed];
+            let mut last = seed;
             i += 1;
             while i < pings.len() {
-                let cur = pings[i];
+                let Some(&cur) = pings.get(i) else {
+                    break;
+                };
                 if cur.time_s - last.time_s > max_time_gap_s {
                     break;
                 }
@@ -152,9 +166,9 @@ impl Clusterer for TimeAwareDensityClusterer {
                 i += 1;
             }
             if members.len() >= min_cluster_pings {
-                clusters.push(
-                    Cluster::from_pings(members).expect("min_cluster_pings ensures non-empty"),
-                );
+                if let Ok(cluster) = Cluster::from_pings(members) {
+                    clusters.push(cluster);
+                }
             }
         }
         clusters
@@ -194,11 +208,15 @@ impl Clusterer for TwoPassClusterer {
                     run_start = Some(idx);
                 }
             } else if let Some(start) = run_start.take() {
-                clusters.extend(self.density.cluster(&pings[start..idx], &[]));
+                if let Some(run) = pings.get(start..idx) {
+                    clusters.extend(self.density.cluster(run, &[]));
+                }
             }
         }
         if let Some(start) = run_start {
-            clusters.extend(self.density.cluster(&pings[start..], &[]));
+            if let Some(run) = pings.get(start..) {
+                clusters.extend(self.density.cluster(run, &[]));
+            }
         }
         clusters
     }
@@ -207,16 +225,39 @@ impl Clusterer for TwoPassClusterer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Point;
+    use crate::types::{PlaceId, Point};
 
     fn ping(lat: f64, lon: f64, t: f64) -> GpsPing {
         GpsPing::new(lat, lon, t, 10.0)
     }
 
+    /// Axis-aligned square centered at the origin with half-side `half_deg`.
+    fn square_place(id: PlaceId, half_deg: f64) -> Place {
+        Place::new(
+            id,
+            vec![
+                Point::new(-half_deg, -half_deg),
+                Point::new(-half_deg, half_deg),
+                Point::new(half_deg, half_deg),
+                Point::new(half_deg, -half_deg),
+                Point::new(-half_deg, -half_deg),
+            ],
+            Point::new(0.0, 0.0),
+            None,
+        )
+    }
+
+    fn density() -> TimeAwareDensityClusterer {
+        TimeAwareDensityClusterer::new(Config::default())
+    }
+
+    fn large_cfg() -> Config {
+        Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap()
+    }
+
     #[test]
     fn clusters_nearby_stationary_pings() {
-        let cfg = Config::default();
-        let clusterer = TwoPassClusterer::new(cfg);
+        let clusterer = TwoPassClusterer::new(Config::default());
         let pings = vec![
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 10.0),
@@ -231,75 +272,35 @@ mod tests {
 
     #[test]
     fn large_poi_pass_consumes_interior_pings() {
-        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
-        let place = Place::new(
-            1,
-            vec![
-                Point::new(-0.001, -0.001),
-                Point::new(-0.001, 0.001),
-                Point::new(0.001, 0.001),
-                Point::new(0.001, -0.001),
-                Point::new(-0.001, -0.001),
-            ],
-            Point::new(0.0, 0.0),
-            None,
-        );
-        let clusterer = TwoPassClusterer::new(cfg);
+        let place = square_place(1, 0.001);
         let pings = vec![
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 10.0),
             ping(0.0, 0.0001, 20.0),
         ];
-        let clusters = clusterer.cluster(&pings, &[place]);
+        let clusters = TwoPassClusterer::new(large_cfg()).cluster(&pings, &[place]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 3);
     }
 
     #[test]
     fn large_poi_overlap_prefers_smallest_area_not_catalog_order() {
-        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
-        // Outer mall fully contains the inner plaza.
-        let mall = Place::new(
-            2,
-            vec![
-                Point::new(-0.002, -0.002),
-                Point::new(-0.002, 0.002),
-                Point::new(0.002, 0.002),
-                Point::new(0.002, -0.002),
-                Point::new(-0.002, -0.002),
-            ],
-            Point::new(0.0, 0.0),
-            None,
-        );
-        let plaza = Place::new(
-            1,
-            vec![
-                Point::new(-0.0005, -0.0005),
-                Point::new(-0.0005, 0.0005),
-                Point::new(0.0005, 0.0005),
-                Point::new(0.0005, -0.0005),
-                Point::new(-0.0005, -0.0005),
-            ],
-            Point::new(0.0, 0.0),
-            None,
-        );
+        let mall = square_place(2, 0.002);
+        let plaza = square_place(1, 0.0005);
         let pings = vec![
-            // Inside both polygons.
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 10.0),
-            // Outside plaza, still inside mall.
             ping(0.001, 0.0, 20.0),
             ping(0.0011, 0.0, 30.0),
         ];
-        let clusterer = LargePoiClusterer::new(cfg);
-        // Larger place listed first: old find_map would keep all four on the mall.
+        let clusterer = LargePoiClusterer::new(large_cfg());
         let (clusters, used) = clusterer.extract(&pings, &[mall.clone(), plaza.clone()]);
         assert_eq!(used, vec![true, true, true, true]);
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters[0].pings.len(), 2);
         assert_eq!(clusters[1].pings.len(), 2);
-        assert_eq!(clusters[0].end_time_s, 10.0);
-        assert_eq!(clusters[1].start_time_s, 20.0);
+        assert!((clusters[0].end_time_s - 10.0).abs() < f64::EPSILON);
+        assert!((clusters[1].start_time_s - 20.0).abs() < f64::EPSILON);
 
         let (rev_clusters, rev_used) = clusterer.extract(&pings, &[plaza, mall]);
         assert_eq!(rev_used, used);
@@ -310,22 +311,9 @@ mod tests {
 
     #[test]
     fn large_poi_without_overlap_still_uses_containing_place() {
-        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
-        let mall = Place::new(
-            1,
-            vec![
-                Point::new(-0.002, -0.002),
-                Point::new(-0.002, 0.002),
-                Point::new(0.002, 0.002),
-                Point::new(0.002, -0.002),
-                Point::new(-0.002, -0.002),
-            ],
-            Point::new(0.0, 0.0),
-            None,
-        );
-        let clusterer = LargePoiClusterer::new(cfg);
+        let mall = square_place(1, 0.002);
         let pings = vec![ping(0.001, 0.0, 0.0), ping(0.0011, 0.0, 10.0)];
-        let (clusters, used) = clusterer.extract(&pings, &[mall]);
+        let (clusters, used) = LargePoiClusterer::new(large_cfg()).extract(&pings, &[mall]);
         assert_eq!(used, vec![true, true]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 2);
@@ -333,24 +321,9 @@ mod tests {
 
     #[test]
     fn density_pass_does_not_merge_across_large_poi_gap() {
-        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
-        let mall = Place::new(
-            1,
-            vec![
-                Point::new(-0.001, -0.001),
-                Point::new(-0.001, 0.001),
-                Point::new(0.001, 0.001),
-                Point::new(0.001, -0.001),
-                Point::new(-0.001, -0.001),
-            ],
-            Point::new(0.0, 0.0),
-            None,
-        );
+        let mall = square_place(1, 0.001);
         let mall_start = 1_000.0;
         let mall_end = 1_010.0;
-        let clusterer = TwoPassClusterer::new(cfg);
-        // Cafe → mall → same cafe. Without contiguous-run density, the two
-        // cafe stays compact into one visit spanning the mall.
         let pings = vec![
             ping(0.002, 0.0, 0.0),
             ping(0.0021, 0.0, 10.0),
@@ -359,48 +332,44 @@ mod tests {
             ping(0.002, 0.0, 2_000.0),
             ping(0.0021, 0.0, 2_010.0),
         ];
-        let clusters = clusterer.cluster(&pings, &[mall]);
+        let clusters = TwoPassClusterer::new(large_cfg()).cluster(&pings, &[mall]);
         assert_eq!(clusters.len(), 3);
         assert!(!clusters.iter().any(|c| c.start_time_s < mall_start && c.end_time_s > mall_end));
     }
 
     #[test]
-    fn density_only_clusterer_ignores_places() {
-        let density = TimeAwareDensityClusterer::new(Config::default());
-        let pings = vec![
-            ping(0.0, 0.0, 0.0),
-            ping(0.0001, 0.0, 10.0),
-            ping(0.0, 0.0001, 20.0),
-        ];
-        let clusters = density.cluster(&pings, &[]);
-        assert_eq!(clusters.len(), 1);
-    }
+    fn density_clustering_gap_and_short_window_behavior() {
+        let short = density().cluster(
+            &[
+                ping(0.0, 0.0, 0.0),
+                ping(0.0001, 0.0, 10.0),
+                ping(0.0, 0.0001, 20.0),
+            ],
+            &[],
+        );
+        assert_eq!(short.len(), 1);
 
-    #[test]
-    fn density_breaks_on_large_temporal_gap() {
-        let density = TimeAwareDensityClusterer::new(Config::default());
-        // Same place morning then evening: must not merge across the gap.
-        let pings = vec![
-            ping(0.0, 0.0, 0.0),
-            ping(0.0001, 0.0, 10.0),
-            ping(0.0, 0.0, 10_000.0),
-            ping(0.0001, 0.0, 10_010.0),
-        ];
-        let clusters = density.cluster(&pings, &[]);
-        assert_eq!(clusters.len(), 2);
-        assert!(!clusters.iter().any(|c| c.start_time_s < 10.0 && c.end_time_s > 10_000.0));
-    }
+        let gapped = density().cluster(
+            &[
+                ping(0.0, 0.0, 0.0),
+                ping(0.0001, 0.0, 10.0),
+                ping(0.0, 0.0, 10_000.0),
+                ping(0.0001, 0.0, 10_010.0),
+            ],
+            &[],
+        );
+        assert_eq!(gapped.len(), 2);
+        assert!(!gapped.iter().any(|c| c.start_time_s < 10.0 && c.end_time_s > 10_000.0));
 
-    #[test]
-    fn density_keeps_short_gaps_in_one_cluster() {
-        let density = TimeAwareDensityClusterer::new(Config::default());
-        let pings = vec![
-            ping(0.0, 0.0, 0.0),
-            ping(0.0001, 0.0, 30.0),
-            ping(0.0, 0.0001, 60.0),
-        ];
-        let clusters = density.cluster(&pings, &[]);
-        assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0].pings.len(), 3);
+        let kept = density().cluster(
+            &[
+                ping(0.0, 0.0, 0.0),
+                ping(0.0001, 0.0, 30.0),
+                ping(0.0, 0.0001, 60.0),
+            ],
+            &[],
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].pings.len(), 3);
     }
 }

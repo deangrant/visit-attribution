@@ -1,28 +1,12 @@
 //! End-to-end example: train a ranker and attribute a short trajectory.
 
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Point, TrainConfig,
-    VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
 };
 
-fn square(id: u64, lat: f64, lon: f64, naics: u32) -> Place {
-    Place::new(
-        id,
-        vec![
-            Point::new(lat, lon),
-            Point::new(lat, lon + 0.001),
-            Point::new(lat + 0.001, lon + 0.001),
-            Point::new(lat + 0.001, lon),
-            Point::new(lat, lon),
-        ],
-        Point::new(lat + 0.0005, lon + 0.0005),
-        Some(naics),
-    )
-}
-
 fn main() {
-    let cafe = square(1, 51.5000, -0.1200, 722_515);
-    let shop = square(2, 51.5000, -0.1190, 445_110);
+    let cafe = Place::square(1, 51.5000, -0.1200, 0.001, Some(722_515));
+    let shop = Place::square(2, 51.5000, -0.1190, 0.001, Some(445_110));
     let pings = vec![
         GpsPing::new(51.5004, -0.1196, 1_700_000_000.0, 8.0),
         GpsPing::new(51.5005, -0.1195, 1_700_000_030.0, 8.0),

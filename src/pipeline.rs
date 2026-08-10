@@ -90,18 +90,6 @@ pub struct VisitAttributorBuilder {
 }
 
 impl VisitAttributorBuilder {
-    /// Set validated pipeline configuration.
-    pub fn config(mut self, config: Config) -> Self {
-        self.config = Some(config);
-        self
-    }
-
-    /// Set the trained or loaded ranker.
-    pub fn ranker(mut self, ranker: GbdtRanker) -> Self {
-        self.ranker = Some(ranker);
-        self
-    }
-
     /// Build the attributor.
     ///
     /// # Errors
@@ -121,6 +109,21 @@ impl VisitAttributorBuilder {
         })
     }
 }
+
+macro_rules! builder_opt {
+    ($name:ident, $ty:ty, $doc:expr) => {
+        impl VisitAttributorBuilder {
+            #[doc = $doc]
+            pub fn $name(mut self, $name: $ty) -> Self {
+                self.$name = Some($name);
+                self
+            }
+        }
+    };
+}
+
+builder_opt!(config, Config, "Set validated pipeline configuration.");
+builder_opt!(ranker, GbdtRanker, "Set the trained or loaded ranker.");
 
 /// Construct an attributor with explicit stage implementations.
 ///

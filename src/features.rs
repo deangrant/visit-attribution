@@ -90,13 +90,16 @@ pub fn absolute_features(
     let hour = cluster.hour_of_day();
     candidates
         .iter()
-        .enumerate()
-        .map(|(i, place)| {
+        .zip(centroid_dists.iter())
+        .zip(polygon_dists.iter())
+        .zip(centroid_ranks.iter())
+        .zip(polygon_ranks.iter())
+        .map(|((((place, &cd), &pd), &cr), &pr)| {
             let mut row = Vec::with_capacity(schema.dim());
-            row.push(centroid_dists[i]);
-            row.push(polygon_dists[i]);
-            row.push(centroid_ranks[i]);
-            row.push(polygon_ranks[i]);
+            row.push(cd);
+            row.push(pd);
+            row.push(cr);
+            row.push(pr);
             append_naics_hour(schema, place.naics4(), hour, &mut row);
             (place.id, row)
         })
@@ -105,7 +108,7 @@ pub fn absolute_features(
 
 fn append_naics_hour(schema: &FeatureSchema, naics4: Option<u32>, hour: u8, row: &mut Vec<f64>) {
     let hour = usize::from(hour.min(23));
-    let in_schema = naics4.map(|n| schema.naics4.binary_search(&n).is_ok()).unwrap_or(false);
+    let in_schema = naics4.is_some_and(|n| schema.naics4.binary_search(&n).is_ok());
     for code in &schema.naics4 {
         for h in 0..24 {
             let on = matches!(naics4, Some(n) if n == *code) && h == hour;
@@ -119,18 +122,30 @@ fn append_naics_hour(schema: &FeatureSchema, naics4: Option<u32>, hour: u8, row:
 
 /// Dense ranks (1 = closest). Ties get the minimum rank.
 fn ranks(values: &[f64]) -> Vec<f64> {
-    let mut order: Vec<usize> = (0..values.len()).collect();
-    order.sort_by(|&a, &b| values[a].partial_cmp(&values[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut pairs: Vec<(f64, usize)> =
+        values.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut out = vec![0.0; values.len()];
     let mut rank = 1.0_f64;
     let mut i = 0usize;
-    while i < order.len() {
+    while i < pairs.len() {
         let mut j = i + 1;
-        while j < order.len() && (values[order[j]] - values[order[i]]).abs() < 1e-9 {
+        while j < pairs.len() {
+            let Some(left) = pairs.get(i) else {
+                break;
+            };
+            let Some(right) = pairs.get(j) else {
+                break;
+            };
+            if (right.0 - left.0).abs() >= 1e-9 {
+                break;
+            }
             j += 1;
         }
-        for k in i..j {
-            out[order[k]] = rank;
+        for pair in pairs.iter().take(j).skip(i) {
+            if let Some(slot) = out.get_mut(pair.1) {
+                *slot = rank;
+            }
         }
         rank += (j - i) as f64;
         i = j;
@@ -163,10 +178,10 @@ pub fn preference_pairs(
     true_place_id: PlaceId,
 ) -> Vec<PreferencePair> {
     let mut pairs = Vec::new();
-    for i in 0..rows.len() {
-        for j in (i + 1)..rows.len() {
-            let a_true = rows[i].0 == true_place_id;
-            let b_true = rows[j].0 == true_place_id;
+    for (i, left) in rows.iter().enumerate() {
+        for right in rows.iter().skip(i + 1) {
+            let a_true = left.0 == true_place_id;
+            let b_true = right.0 == true_place_id;
             let label = if a_true && !b_true {
                 1.0
             } else if b_true && !a_true {
@@ -174,13 +189,12 @@ pub fn preference_pairs(
             } else {
                 continue;
             };
-            let diff: Vec<f64> =
-                rows[i].1.iter().zip(rows[j].1.iter()).map(|(a, b)| a - b).collect();
+            let diff: Vec<f64> = left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b).collect();
             pairs.push(PreferencePair {
                 diff,
                 label,
-                left_id: rows[i].0,
-                right_id: rows[j].0,
+                left_id: left.0,
+                right_id: right.0,
             });
         }
     }

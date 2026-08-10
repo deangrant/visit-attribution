@@ -1,29 +1,13 @@
 //! Integration: synthetic strip mall with two adjacent stores.
 
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Point, TrainConfig,
-    VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
 };
-
-fn store(id: u64, lat0: f64, lon0: f64, naics: u32) -> Place {
-    Place::new(
-        id,
-        vec![
-            Point::new(lat0, lon0),
-            Point::new(lat0, lon0 + 0.0008),
-            Point::new(lat0 + 0.0008, lon0 + 0.0008),
-            Point::new(lat0 + 0.0008, lon0),
-            Point::new(lat0, lon0),
-        ],
-        Point::new(lat0 + 0.0004, lon0 + 0.0004),
-        Some(naics),
-    )
-}
 
 #[test]
 fn attributes_visit_to_trained_place() {
-    let left = store(10, 0.0, 0.0, 445_110);
-    let right = store(20, 0.0, 0.0010, 722_515);
+    let left = Place::square(10, 0.0, 0.0, 0.0008, Some(445_110));
+    let right = Place::square(20, 0.0, 0.0010, 0.0008, Some(722_515));
     let pings = vec![
         GpsPing::new(0.0003, 0.0003, 0.0, 5.0),
         GpsPing::new(0.0004, 0.00035, 20.0, 5.0),

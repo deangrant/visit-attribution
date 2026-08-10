@@ -105,27 +105,38 @@ impl Ranker for GbdtRanker {
             ));
         }
         if candidates.len() == 1 {
-            return Ok((candidates[0].id, 0));
+            let Some(only) = candidates.first() else {
+                return Err(Error::InvalidInput(
+                    "cannot rank an empty candidate set".into(),
+                ));
+            };
+            return Ok((only.id, 0));
         }
         let rows = absolute_features(&self.model.schema, cluster, candidates);
         let mut wins = vec![0_u32; rows.len()];
         let mut diff = Vec::with_capacity(self.model.schema.dim());
-        for i in 0..rows.len() {
-            for j in (i + 1)..rows.len() {
+        for (i, left) in rows.iter().enumerate() {
+            for (offset, right) in rows.iter().enumerate().skip(i + 1) {
+                let j = offset;
                 diff.clear();
-                diff.extend(rows[i].1.iter().zip(rows[j].1.iter()).map(|(a, b)| a - b));
+                diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
                 let score = self.model.predict_raw(&diff)?;
                 if score >= 0.0 {
-                    wins[i] += 1;
-                } else {
-                    wins[j] += 1;
+                    if let Some(w) = wins.get_mut(i) {
+                        *w += 1;
+                    }
+                } else if let Some(w) = wins.get_mut(j) {
+                    *w += 1;
                 }
             }
         }
-        let best = (0..rows.len())
-            .max_by(|&a, &b| wins[a].cmp(&wins[b]).then_with(|| rows[b].0.cmp(&rows[a].0)))
-            .expect("rows non-empty");
-        Ok((rows[best].0, wins[best]))
+        let (best_id, best_wins) = rows
+            .iter()
+            .zip(wins.iter())
+            .max_by(|(a, aw), (b, bw)| aw.cmp(bw).then_with(|| b.0.cmp(&a.0)))
+            .map(|((id, _), &w)| (*id, w))
+            .ok_or_else(|| Error::InvalidInput("cannot rank an empty candidate set".into()))?;
+        Ok((best_id, best_wins))
     }
 }
 
@@ -147,21 +158,10 @@ pub fn visit_from_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{GpsPing, Point};
+    use crate::types::GpsPing;
 
     fn square(id: PlaceId, lat: f64, lon: f64, naics: u32) -> Place {
-        Place::new(
-            id,
-            vec![
-                Point::new(lat, lon),
-                Point::new(lat, lon + 0.001),
-                Point::new(lat + 0.001, lon + 0.001),
-                Point::new(lat + 0.001, lon),
-                Point::new(lat, lon),
-            ],
-            Point::new(lat + 0.0005, lon + 0.0005),
-            Some(naics),
-        )
+        Place::square(id, lat, lon, 0.001, Some(naics))
     }
 
     #[test]
@@ -256,23 +256,14 @@ L 0
 
     #[test]
     fn singleton_candidate_has_zero_wins() {
-        let ranker = zero_score_ranker();
-        let only = square(9, 0.0, 0.0, 445_110);
-        let (id, wins) = ranker.rank(&cluster_near_origin(), &[only]).unwrap();
-        assert_eq!(id, 9);
-        assert_eq!(wins, 0);
+        let (id, wins) = zero_score_ranker()
+            .rank(&cluster_near_origin(), &[square(9, 0.0, 0.0, 445_110)])
+            .unwrap();
+        assert_eq!((id, wins), (9, 0));
     }
 
     #[test]
     fn win_count_tie_prefers_lowest_place_id() {
-        // Mirrors GbdtRanker::rank tie-break: max wins, then lowest PlaceId.
-        let wins = [1_u32, 1];
-        let ids = [5_u64, 2_u64];
-        let best = (0..wins.len())
-            .max_by(|&a, &b| wins[a].cmp(&wins[b]).then_with(|| ids[b].cmp(&ids[a])))
-            .unwrap();
-        assert_eq!(ids[best], 2);
-
         // Through the ranker, a constant-zero scorer awards each pair to the
         // lower index (score >= 0). With equal geometry, the first list entry
         // uniquely leads — PlaceId only decides when win counts match.
@@ -288,11 +279,11 @@ L 0
     #[test]
     fn duplicate_place_ids_are_accepted() {
         // Duplicates are not rejected; both rows compete in the tournament.
-        let ranker = zero_score_ranker();
         let place = square(3, 0.0, 0.0, 445_110);
-        let (id, wins) = ranker.rank(&cluster_near_origin(), &[place.clone(), place]).unwrap();
-        assert_eq!(id, 3);
-        assert_eq!(wins, 1);
+        let (id, wins) = zero_score_ranker()
+            .rank(&cluster_near_origin(), &[place.clone(), place])
+            .unwrap();
+        assert_eq!((id, wins), (3, 1));
     }
 
     #[test]

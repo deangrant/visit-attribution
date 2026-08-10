@@ -21,7 +21,8 @@ impl Point {
 
 impl From<[f64; 2]> for Point {
     fn from(value: [f64; 2]) -> Self {
-        Self::new(value[0], value[1])
+        let [lat, lon] = value;
+        Self::new(lat, lon)
     }
 }
 
@@ -83,6 +84,26 @@ impl Place {
             centroid,
             naics,
         }
+    }
+
+    /// Axis-aligned square; SW corner `(lat, lon)`, side `side_deg`.
+    ///
+    /// Centroid is placed at the half-side offset from the SW corner.
+    #[must_use]
+    pub fn square(id: PlaceId, lat: f64, lon: f64, side_deg: f64, naics: Option<u32>) -> Self {
+        let half = side_deg * 0.5;
+        Self::new(
+            id,
+            vec![
+                Point::new(lat, lon),
+                Point::new(lat, lon + side_deg),
+                Point::new(lat + side_deg, lon + side_deg),
+                Point::new(lat + side_deg, lon),
+                Point::new(lat, lon),
+            ],
+            Point::new(lat + half, lon + half),
+            naics,
+        )
     }
 
     /// Four-digit NAICS prefix, if a NAICS code is present.
@@ -155,10 +176,7 @@ impl Cluster {
         }
         let hour = (self.start_time_s.rem_euclid(86_400.0) / 3600.0).floor();
         // rem_euclid keeps seconds in [0, 86400); hour is in [0, 23].
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        {
-            hour as u8
-        }
+        hour as u8
     }
 }
 
@@ -204,8 +222,8 @@ mod tests {
         let ping = GpsPing::new(1.5, -2.5, 10.0, 5.0);
         let cluster = Cluster::from_pings(vec![ping]).unwrap();
         assert_eq!(cluster.centroid, Point::new(1.5, -2.5));
-        assert_eq!(cluster.start_time_s, 10.0);
-        assert_eq!(cluster.end_time_s, 10.0);
+        assert!((cluster.start_time_s - 10.0).abs() < f64::EPSILON);
+        assert!((cluster.end_time_s - 10.0).abs() < f64::EPSILON);
     }
 
     fn cluster_at(time_s: f64) -> Cluster {
