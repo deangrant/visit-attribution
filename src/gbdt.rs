@@ -6,6 +6,15 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::features::FeatureSchema;
 
+/// Upper bound on forest size for train and load.
+const MAX_TREES: usize = 256;
+/// Maximum tree depth (root = 0) for train and load.
+const MAX_TREE_DEPTH: usize = 32;
+/// Maximum nodes allowed in a single loaded tree.
+const MAX_NODES_PER_TREE: usize = 8192;
+/// Maximum serialized model size accepted by load/parse.
+const MAX_MODEL_BYTES: usize = 8 * 1024 * 1024;
+
 /// Hyperparameters for GBDT training.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrainConfig {
@@ -94,6 +103,18 @@ impl GbdtModel {
             return Err(Error::InvalidInput(
                 "n_trees, min_leaf, and subsample_stride must be > 0".into(),
             ));
+        }
+        if config.n_trees > MAX_TREES {
+            return Err(Error::InvalidInput(format!(
+                "n_trees {} exceeds limit {MAX_TREES}",
+                config.n_trees
+            )));
+        }
+        if config.max_depth > MAX_TREE_DEPTH {
+            return Err(Error::InvalidInput(format!(
+                "max_depth {} exceeds limit {MAX_TREE_DEPTH}",
+                config.max_depth
+            )));
         }
         let base_score = 0.0;
         let mut preds = vec![base_score; xs.len()];
@@ -193,6 +214,12 @@ impl GbdtModel {
     }
 
     fn from_string_format(text: &str) -> Result<Self> {
+        if text.len() > MAX_MODEL_BYTES {
+            return Err(Error::Model(format!(
+                "model text length {} exceeds limit {MAX_MODEL_BYTES}",
+                text.len()
+            )));
+        }
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
         let header = lines.next().ok_or_else(|| Error::Model("empty model file".into()))?;
         if header != "VA_GBDT 1" {
@@ -231,11 +258,17 @@ impl GbdtModel {
             lines.next().ok_or_else(|| Error::Model("missing trees".into()))?,
             "trees",
         )?;
+        if n_trees > MAX_TREES {
+            return Err(Error::Model(format!(
+                "trees {n_trees} exceeds limit {MAX_TREES}"
+            )));
+        }
         let mut trees = Vec::with_capacity(n_trees);
         for _ in 0..n_trees {
             let line = lines.next().ok_or_else(|| Error::Model("missing tree line".into()))?;
             let mut toks = line.split_whitespace().peekable();
-            let tree = parse_node(&mut toks)?;
+            let mut nodes = 0usize;
+            let tree = parse_node(&mut toks, 0, &mut nodes)?;
             if toks.next().is_some() {
                 return Err(Error::Model("trailing tokens on tree line".into()));
             }
@@ -411,7 +444,17 @@ fn write_node(out: &mut String, node: &Node) {
     }
 }
 
-fn parse_node<'a>(toks: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>) -> Result<Node> {
+fn parse_node<'a>(
+    toks: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<Node> {
+    *nodes += 1;
+    if *nodes > MAX_NODES_PER_TREE {
+        return Err(Error::Model(format!(
+            "tree exceeds node limit {MAX_NODES_PER_TREE}"
+        )));
+    }
     let tag = toks.next().ok_or_else(|| Error::Model("unexpected end of tree".into()))?;
     match tag {
         "L" => {
@@ -423,6 +466,11 @@ fn parse_node<'a>(toks: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>)
             Ok(Node::Leaf { value })
         }
         "B" => {
+            if depth >= MAX_TREE_DEPTH {
+                return Err(Error::Model(format!(
+                    "tree depth exceeds limit {MAX_TREE_DEPTH}"
+                )));
+            }
             let feature = toks
                 .next()
                 .ok_or_else(|| Error::Model("missing feature".into()))?
@@ -433,8 +481,8 @@ fn parse_node<'a>(toks: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>)
                 .ok_or_else(|| Error::Model("missing threshold".into()))?
                 .parse::<f64>()
                 .map_err(|_| Error::Model("bad threshold".into()))?;
-            let left = Box::new(parse_node(toks)?);
-            let right = Box::new(parse_node(toks)?);
+            let left = Box::new(parse_node(toks, depth + 1, nodes)?);
+            let right = Box::new(parse_node(toks, depth + 1, nodes)?);
             Ok(Node::Branch {
                 feature,
                 threshold,
@@ -536,6 +584,78 @@ B 40 0 L 1 L -1
         let ys = vec![1.0, -1.0];
         let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
         let err = model.predict_raw(&[1.0, 0.0]).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn load_rejects_too_many_trees() {
+        let text = format!(
+            "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 28
+naics
+trees {}
+L 0
+",
+            MAX_TREES + 1
+        );
+        let err = GbdtModel::from_string_format(&text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn load_rejects_excessive_tree_depth() {
+        let mut tree = String::new();
+        for _ in 0..=MAX_TREE_DEPTH {
+            tree.push_str("B 0 0 ");
+        }
+        tree.push_str("L 0");
+        for _ in 0..=MAX_TREE_DEPTH {
+            tree.push_str(" L 0");
+        }
+        let text = format!(
+            "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 28
+naics
+trees 1
+{tree}
+"
+        );
+        let err = GbdtModel::from_string_format(&text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn load_rejects_oversized_model_text() {
+        let mut text = String::from(
+            "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 28
+naics
+trees 1
+L 0
+",
+        );
+        text.push_str(&"x".repeat(MAX_MODEL_BYTES));
+        let err = GbdtModel::from_string_format(&text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn train_rejects_excessive_n_trees() {
+        let schema = FeatureSchema::new(vec![]);
+        let xs = vec![row4(1.0), row4(-1.0)];
+        let ys = vec![1.0, -1.0];
+        let mut config = TrainConfig::default();
+        config.n_trees = MAX_TREES + 1;
+        let err = GbdtModel::train(schema, &xs, &ys, &config).unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)));
     }
 }
