@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use crate::config::Config;
 use crate::geo::{distance_to_polygon_m, meters_to_degrees, BBox};
 use crate::spatial::BBoxQuadtree;
-use crate::types::{Cluster, Place, PlaceId, Point};
+use crate::types::{Cluster, Place, Point};
 
 /// Looks up candidate places for a cluster.
 ///
@@ -160,18 +160,10 @@ fn cluster_probe_ring(cluster: &Cluster, radius_m: f64) -> Vec<Point> {
     ]
 }
 
-/// Resolve places by id from a slice.
-#[must_use]
-pub fn places_by_ids(places: &[Place], ids: &[PlaceId]) -> Vec<Place> {
-    ids.iter()
-        .filter_map(|id| places.iter().find(|p| p.id == *id).cloned())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::GpsPing;
+    use crate::types::{GpsPing, PlaceId};
 
     fn square(id: PlaceId, lat0: f64, lon0: f64) -> Place {
         Place::new(

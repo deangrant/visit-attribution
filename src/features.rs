@@ -146,15 +146,17 @@ pub struct PreferencePair {
     /// `1` if A is the true place, `-1` if B is the true place.
     pub label: f64,
     /// Left-hand place id (A).
+    #[cfg_attr(not(test), expect(dead_code))]
     pub left_id: PlaceId,
     /// Right-hand place id (B).
+    #[cfg_attr(not(test), expect(dead_code))]
     pub right_id: PlaceId,
 }
 
 /// Expand absolute rows into unordered preference pairs for a known true place.
 ///
-/// Emits one row per unordered candidate pair that involves the true place,
-/// matching [`inference_pairs`] orientation (`i < j`, `diff = left − right`).
+/// Emits one row per unordered candidate pair that involves the true place.
+/// Pairs use index order `i < j` with `diff = left − right`.
 #[must_use]
 pub fn preference_pairs(
     rows: &[(PlaceId, Vec<f64>)],
@@ -177,25 +179,6 @@ pub fn preference_pairs(
             pairs.push(PreferencePair {
                 diff,
                 label,
-                left_id: rows[i].0,
-                right_id: rows[j].0,
-            });
-        }
-    }
-    pairs
-}
-
-/// All unordered-style ordered pairs for inference (A vs B for A != B).
-#[must_use]
-pub fn inference_pairs(rows: &[(PlaceId, Vec<f64>)]) -> Vec<PreferencePair> {
-    let mut pairs = Vec::new();
-    for i in 0..rows.len() {
-        for j in (i + 1)..rows.len() {
-            let diff: Vec<f64> =
-                rows[i].1.iter().zip(rows[j].1.iter()).map(|(a, b)| a - b).collect();
-            pairs.push(PreferencePair {
-                diff,
-                label: 0.0,
                 left_id: rows[i].0,
                 right_id: rows[j].0,
             });

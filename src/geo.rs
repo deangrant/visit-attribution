@@ -157,46 +157,6 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
     area.abs() * 0.5
 }
 
-/// Expand an exterior ring outward by approximately `expand_m` meters.
-///
-/// Each vertex is pushed away from the ring centroid in a local equirectangular
-/// frame. This is a coarse visual/heuristic pad only—not a cadastral buffer and
-/// not used by the place join (join uses [`distance_to_polygon_m`] instead).
-/// Concave rings can self-intersect or fill notches incorrectly.
-#[must_use]
-pub fn expand_ring_radial(ring: &[Point], expand_m: f64) -> Vec<Point> {
-    if expand_m <= 0.0 || ring.len() < 3 {
-        return ensure_closed(ring);
-    }
-    let closed = ensure_closed(ring);
-    let n = closed.len() - 1;
-    if n < 3 {
-        return closed;
-    }
-    let mean_lat = closed[..n].iter().map(|p| p.lat).sum::<f64>() / n as f64;
-    let mean_lon = closed[..n].iter().map(|p| p.lon).sum::<f64>() / n as f64;
-    let (mx, my) = meters_to_degrees(mean_lat, 1.0);
-    let mut out = Vec::with_capacity(n + 1);
-    for p in closed.iter().take(n) {
-        let dx = (p.lon - mean_lon) / my;
-        let dy = (p.lat - mean_lat) / mx;
-        let len = (dx * dx + dy * dy).sqrt();
-        let (ux, uy) = if len < 1e-12 {
-            (1.0, 0.0)
-        } else {
-            (dx / len, dy / len)
-        };
-        out.push(Point::new(
-            p.lat + uy * expand_m * mx,
-            p.lon + ux * expand_m * my,
-        ));
-    }
-    if let Some(first) = out.first().copied() {
-        out.push(first);
-    }
-    out
-}
-
 /// Axis-aligned bounding box in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BBox {
@@ -252,15 +212,6 @@ impl BBox {
             max_lon: self.max_lon.max(other.max_lon),
         }
     }
-
-    /// Whether the point lies inside the box.
-    #[must_use]
-    pub fn contains_point(self, p: Point) -> bool {
-        p.lat >= self.min_lat
-            && p.lat <= self.max_lat
-            && p.lon >= self.min_lon
-            && p.lon <= self.max_lon
-    }
 }
 
 #[cfg(test)]
@@ -313,12 +264,5 @@ mod tests {
     #[test]
     fn ring_area_positive() {
         assert!(ring_area_m2(&unit_square()) > 0.0);
-    }
-
-    #[test]
-    fn expand_ring_radial_increases_area() {
-        let ring = unit_square();
-        let expanded = expand_ring_radial(&ring, 20.0);
-        assert!(ring_area_m2(&expanded) > ring_area_m2(&ring));
     }
 }
