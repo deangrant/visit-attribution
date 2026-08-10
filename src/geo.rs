@@ -130,15 +130,15 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
     area.abs() * 0.5
 }
 
-/// Expand an exterior ring outward by approximately `buffer_m` meters.
+/// Expand an exterior ring outward by approximately `expand_m` meters.
 ///
 /// Each vertex is pushed away from the ring centroid in a local equirectangular
 /// frame. This is a coarse visual/heuristic pad only—not a cadastral buffer and
 /// not used by the place join (join uses [`distance_to_polygon_m`] instead).
 /// Concave rings can self-intersect or fill notches incorrectly.
 #[must_use]
-pub fn buffer_ring(ring: &[Point], buffer_m: f64) -> Vec<Point> {
-    if buffer_m <= 0.0 || ring.len() < 3 {
+pub fn expand_ring_radial(ring: &[Point], expand_m: f64) -> Vec<Point> {
+    if expand_m <= 0.0 || ring.len() < 3 {
         return ensure_closed(ring);
     }
     let closed = ensure_closed(ring);
@@ -160,8 +160,8 @@ pub fn buffer_ring(ring: &[Point], buffer_m: f64) -> Vec<Point> {
             (dx / len, dy / len)
         };
         out.push(Point::new(
-            p.lat + uy * buffer_m * mx,
-            p.lon + ux * buffer_m * my,
+            p.lat + uy * expand_m * mx,
+            p.lon + ux * expand_m * my,
         ));
     }
     if let Some(first) = out.first().copied() {
@@ -264,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn buffer_increases_area() {
+    fn expand_ring_radial_increases_area() {
         let ring = unit_square();
-        let buffered = buffer_ring(&ring, 20.0);
-        assert!(ring_area_m2(&buffered) > ring_area_m2(&ring));
+        let expanded = expand_ring_radial(&ring, 20.0);
+        assert!(ring_area_m2(&expanded) > ring_area_m2(&ring));
     }
 }

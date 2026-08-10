@@ -45,7 +45,7 @@ fn main() {
 
     let places = vec![cafe, shop];
     let attributor = VisitAttributor::builder()
-        .config(Config::builder().join_buffer_m(120.0).build().expect("config"))
+        .config(Config::builder().join_radius_m(120.0).build().expect("config"))
         .ranker(ranker)
         .build()
         .expect("build");

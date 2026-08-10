@@ -27,8 +27,8 @@ pub struct Config {
     pub min_cluster_pings: usize,
     /// Places with area at or above this (m²) use the large-POI pass.
     pub large_poi_area_m2: f64,
-    /// Extra buffer (m) around cluster centroids when joining places.
-    pub join_buffer_m: f64,
+    /// Max distance (m) from a place polygon for join candidates.
+    pub join_radius_m: f64,
 }
 
 impl Default for Config {
@@ -44,7 +44,7 @@ impl Default for Config {
             max_time_gap_s: 1_800.0,
             min_cluster_pings: 2,
             large_poi_area_m2: 50_000.0,
-            join_buffer_m: 50.0,
+            join_radius_m: 50.0,
         }
     }
 }
@@ -76,7 +76,7 @@ impl Config {
             ("max_dist_threshold_m", self.max_dist_threshold_m, false),
             ("max_time_gap_s", self.max_time_gap_s, false),
             ("large_poi_area_m2", self.large_poi_area_m2, false),
-            ("join_buffer_m", self.join_buffer_m, true),
+            ("join_radius_m", self.join_radius_m, true),
         ] {
             if !value.is_finite() || (allow_zero && value < 0.0) || (!allow_zero && value <= 0.0) {
                 return Err(Error::InvalidInput(format!(
@@ -172,9 +172,9 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set the join buffer around clusters when matching places (meters).
-    pub fn join_buffer_m(mut self, v: f64) -> Self {
-        self.config.join_buffer_m = v;
+    /// Set the max distance (m) from a place polygon for join candidates.
+    pub fn join_radius_m(mut self, v: f64) -> Self {
+        self.config.join_radius_m = v;
         self
     }
 

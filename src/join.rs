@@ -12,7 +12,7 @@ use crate::types::{Cluster, Place, PlaceId, Point};
 ///
 /// - Empty indexes return an empty candidate list.
 /// - A place is a candidate when the cluster centroid or any ping is within
-///   `join_buffer_m + max_horizontal_accuracy` of the polygon (edge or interior).
+///   `join_radius_m + max_horizontal_accuracy` of the polygon (edge or interior).
 /// - Implementations must not panic on empty clusters or empty place catalogs.
 /// - Returned places are owned clones suitable for ranking.
 pub trait PlaceIndex {
@@ -45,26 +45,26 @@ pub struct BruteForcePlaceIndex {
     grid: HashMap<(i32, i32), Vec<usize>>,
     cell_dlat: f64,
     cell_dlon: f64,
-    join_buffer_m: f64,
+    join_radius_m: f64,
 }
 
 impl BruteForcePlaceIndex {
     /// Index a place list for joining.
     #[must_use]
     pub fn new(places: Vec<Place>, config: &Config) -> Self {
-        let join_buffer_m = config.join_buffer_m;
+        let join_radius_m = config.join_radius_m;
         let ref_lat = if places.is_empty() {
             0.0
         } else {
             places.iter().map(|p| p.centroid.lat).sum::<f64>() / places.len() as f64
         };
-        let cell_m = join_buffer_m.max(250.0);
+        let cell_m = join_radius_m.max(250.0);
         let (cell_dlat, cell_dlon) = meters_to_degrees(ref_lat, cell_m);
 
         let mut bboxes = Vec::with_capacity(places.len());
         let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (idx, place) in places.iter().enumerate() {
-            let bbox = BBox::from_ring(&place.polygon, join_buffer_m).unwrap_or(BBox {
+            let bbox = BBox::from_ring(&place.polygon, join_radius_m).unwrap_or(BBox {
                 min_lat: place.centroid.lat,
                 max_lat: place.centroid.lat,
                 min_lon: place.centroid.lon,
@@ -80,7 +80,7 @@ impl BruteForcePlaceIndex {
             grid,
             cell_dlat,
             cell_dlon,
-            join_buffer_m,
+            join_radius_m,
         }
     }
 
@@ -101,7 +101,7 @@ impl PlaceIndex for BruteForcePlaceIndex {
             .iter()
             .map(|p| p.horizontal_accuracy_m)
             .fold(0.0_f64, f64::max);
-        let radius = self.join_buffer_m + ha;
+        let radius = self.join_radius_m + ha;
         let probe = cluster_probe_ring(cluster, radius);
         let Some(query_bbox) = BBox::from_ring(&probe, 0.0) else {
             return Vec::new();
@@ -268,8 +268,8 @@ mod tests {
 
     #[test]
     fn concave_notch_farther_than_radius_is_not_a_candidate() {
-        // Small buffer so the open notch (~55 m from the inner corner) is outside.
-        let cfg = Config::builder().join_buffer_m(10.0).build().unwrap();
+        // Small radius so the open notch (~55 m from the inner corner) is outside.
+        let cfg = Config::builder().join_radius_m(10.0).build().unwrap();
         let index = BruteForcePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0015, 0.0015, 0.0, 5.0),
@@ -279,8 +279,8 @@ mod tests {
     }
 
     #[test]
-    fn point_near_l_arm_within_buffer_is_candidate() {
-        let cfg = Config::builder().join_buffer_m(50.0).build().unwrap();
+    fn point_near_l_arm_within_radius_is_candidate() {
+        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
         let index = BruteForcePlaceIndexFactory::new(cfg).create(&[l_shape(1)]);
         // ~5–6 m east of the horizontal bar (0.00005° ≈ 5.5 m).
         let cluster = Cluster::from_pings(vec![

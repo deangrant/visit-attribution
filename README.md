@@ -11,7 +11,7 @@ preference-learning gradient-boosted model.
 
 1. **Clean** — drop poor horizontal accuracy, impossible jumps, and driving.
 2. **Cluster** — large-footprint POI pass, then time-aware density clustering.
-3. **Join** — match each cluster to nearby place polygons (with buffer).
+3. **Join** — match each cluster to nearby place polygons (with join radius).
 4. **Rank** — pairwise preference features + GBDT + tournament scorecard.
 
 ## Quick start
@@ -93,7 +93,7 @@ cargo run --example basic
 | `max_time_gap_s` | 1_800 | Max gap between consecutive cluster pings |
 | `min_cluster_pings` | 2 | Minimum cluster size |
 | `large_poi_area_m2` | 50_000 | Large-POI first pass |
-| `join_buffer_m` | 50 | Place join padding |
+| `join_radius_m` | 50 | Max distance from place polygon for join candidates |
 
 ## Model persistence
 

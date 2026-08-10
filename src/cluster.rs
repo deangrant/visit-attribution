@@ -77,13 +77,16 @@ impl Clusterer for LargePoiClusterer {
     }
 }
 
-/// Time-aware density clustering on a time-ordered ping run.
+/// Time-aware sequential density clustering on a time-ordered ping run.
+///
+/// Grows contiguous runs using distance and time-gap thresholds against recent
+/// members. This is not DBSCAN (no ε-neighborhood graph or core/border points).
 #[derive(Debug, Clone)]
-pub struct TimeAwareDbscan {
+pub struct TimeAwareDensityClusterer {
     config: Config,
 }
 
-impl TimeAwareDbscan {
+impl TimeAwareDensityClusterer {
     /// Create a density clusterer from configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
@@ -91,7 +94,7 @@ impl TimeAwareDbscan {
     }
 }
 
-impl Clusterer for TimeAwareDbscan {
+impl Clusterer for TimeAwareDensityClusterer {
     fn cluster(&self, pings: &[GpsPing], _places: &[Place]) -> Vec<Cluster> {
         if pings.is_empty() {
             return Vec::new();
@@ -140,7 +143,7 @@ impl Clusterer for TimeAwareDbscan {
 #[derive(Debug, Clone)]
 pub struct TwoPassClusterer {
     large: LargePoiClusterer,
-    density: TimeAwareDbscan,
+    density: TimeAwareDensityClusterer,
 }
 
 impl TwoPassClusterer {
@@ -149,7 +152,7 @@ impl TwoPassClusterer {
     pub fn new(config: Config) -> Self {
         Self {
             large: LargePoiClusterer::new(config.clone()),
-            density: TimeAwareDbscan::new(config),
+            density: TimeAwareDensityClusterer::new(config),
         }
     }
 }
@@ -269,7 +272,7 @@ mod tests {
 
     #[test]
     fn density_only_clusterer_ignores_places() {
-        let density = TimeAwareDbscan::new(Config::default());
+        let density = TimeAwareDensityClusterer::new(Config::default());
         let pings = vec![
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 10.0),
@@ -281,7 +284,7 @@ mod tests {
 
     #[test]
     fn density_breaks_on_large_temporal_gap() {
-        let density = TimeAwareDbscan::new(Config::default());
+        let density = TimeAwareDensityClusterer::new(Config::default());
         // Same place morning then evening: must not merge across the gap.
         let pings = vec![
             ping(0.0, 0.0, 0.0),
@@ -296,7 +299,7 @@ mod tests {
 
     #[test]
     fn density_keeps_short_gaps_in_one_cluster() {
-        let density = TimeAwareDbscan::new(Config::default());
+        let density = TimeAwareDensityClusterer::new(Config::default());
         let pings = vec![
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 30.0),

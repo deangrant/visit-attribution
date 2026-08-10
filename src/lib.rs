@@ -85,7 +85,7 @@ mod types;
 #[doc(inline)]
 pub use clean::{DefaultPingCleaner, PingCleaner};
 #[doc(inline)]
-pub use cluster::{Clusterer, LargePoiClusterer, TimeAwareDbscan, TwoPassClusterer};
+pub use cluster::{Clusterer, LargePoiClusterer, TimeAwareDensityClusterer, TwoPassClusterer};
 #[doc(inline)]
 pub use config::{Config, ConfigBuilder};
 #[doc(inline)]
@@ -99,7 +99,7 @@ pub use features::{
 pub use gbdt::{GbdtModel, TrainConfig};
 #[doc(inline)]
 pub use geo::{
-    buffer_ring, distance_to_polygon_m, haversine_m, point_in_polygon, ring_area_m2, BBox,
+    expand_ring_radial, distance_to_polygon_m, haversine_m, point_in_polygon, ring_area_m2, BBox,
     EARTH_RADIUS_M,
 };
 #[doc(inline)]

@@ -46,7 +46,7 @@ fn attributes_visit_to_trained_place() {
     )
     .unwrap();
 
-    let config = Config::builder().min_cluster_pings(2).join_buffer_m(80.0).build().unwrap();
+    let config = Config::builder().min_cluster_pings(2).join_radius_m(80.0).build().unwrap();
     let places = vec![left, right];
     let attributor = VisitAttributor::builder().config(config).ranker(ranker).build().unwrap();
     let result = attributor.attribute(&pings, &places).unwrap();

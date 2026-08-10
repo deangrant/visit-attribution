@@ -13,7 +13,7 @@ use crate::types::{Cluster, GpsPing, Place, Visit};
 pub struct AttributionResult {
     /// Clusters successfully ranked to a place.
     pub visits: Vec<Visit>,
-    /// Clusters with no join candidates (catalog or buffer miss).
+    /// Clusters with no join candidates (catalog or join-radius miss).
     pub unmatched_clusters: Vec<Cluster>,
 }
 
@@ -48,7 +48,7 @@ where
     ///
     /// Clusters that find no join candidates are not ranked; they are returned
     /// in [`AttributionResult::unmatched_clusters`] so callers can detect
-    /// catalog gaps or join-buffer misses in production.
+    /// catalog gaps or join-radius misses in production.
     ///
     /// # Errors
     ///
