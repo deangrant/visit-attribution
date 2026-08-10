@@ -18,6 +18,9 @@ pub trait Clusterer {
 }
 
 /// First-pass clustering: consecutive pings inside large-area POI polygons.
+///
+/// When a ping lies in multiple large POIs, the stay is attributed to the
+/// smallest-area place (lowest [`PlaceId`] on ties), not catalog iteration order.
 #[derive(Debug, Clone)]
 pub struct LargePoiClusterer {
     config: Config,
@@ -31,6 +34,8 @@ impl LargePoiClusterer {
     }
 
     /// Extract large-POI clusters and a mask of consumed ping indices.
+    ///
+    /// Overlapping large POIs resolve to smallest `area_m2`, then lowest place id.
     #[must_use]
     pub fn extract(&self, pings: &[GpsPing], places: &[Place]) -> (Vec<Cluster>, Vec<bool>) {
         let mut used = vec![false; pings.len()];
@@ -42,9 +47,16 @@ impl LargePoiClusterer {
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
-            let place_id = large.iter().find_map(|place| {
-                point_in_polygon(pings[i].point, &place.polygon).then_some(place.id)
-            });
+            let place_id = large
+                .iter()
+                .filter(|place| point_in_polygon(pings[i].point, &place.polygon))
+                .min_by(|a, b| {
+                    a.area_m2
+                        .partial_cmp(&b.area_m2)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.id.cmp(&b.id))
+                })
+                .map(|p| p.id);
             let Some(pid) = place_id else {
                 i += 1;
                 continue;
@@ -237,6 +249,88 @@ mod tests {
         let clusters = clusterer.cluster(&pings, &[place]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 3);
+    }
+
+    #[test]
+    fn large_poi_overlap_prefers_smallest_area_not_catalog_order() {
+        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
+        // Outer mall fully contains the inner plaza.
+        let mall = Place::new(
+            2,
+            vec![
+                Point::new(-0.002, -0.002),
+                Point::new(-0.002, 0.002),
+                Point::new(0.002, 0.002),
+                Point::new(0.002, -0.002),
+                Point::new(-0.002, -0.002),
+            ],
+            Point::new(0.0, 0.0),
+            None,
+            50_000.0,
+        );
+        let plaza = Place::new(
+            1,
+            vec![
+                Point::new(-0.0005, -0.0005),
+                Point::new(-0.0005, 0.0005),
+                Point::new(0.0005, 0.0005),
+                Point::new(0.0005, -0.0005),
+                Point::new(-0.0005, -0.0005),
+            ],
+            Point::new(0.0, 0.0),
+            None,
+            5_000.0,
+        );
+        let pings = vec![
+            // Inside both polygons.
+            ping(0.0, 0.0, 0.0),
+            ping(0.0001, 0.0, 10.0),
+            // Outside plaza, still inside mall.
+            ping(0.001, 0.0, 20.0),
+            ping(0.0011, 0.0, 30.0),
+        ];
+        let clusterer = LargePoiClusterer::new(cfg);
+        // Larger place listed first: old find_map would keep all four on the mall.
+        let (clusters, used) = clusterer.extract(&pings, &[mall.clone(), plaza.clone()]);
+        assert_eq!(used, vec![true, true, true, true]);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].pings.len(), 2);
+        assert_eq!(clusters[1].pings.len(), 2);
+        assert_eq!(clusters[0].end_time_s, 10.0);
+        assert_eq!(clusters[1].start_time_s, 20.0);
+
+        let (rev_clusters, rev_used) = clusterer.extract(&pings, &[plaza, mall]);
+        assert_eq!(rev_used, used);
+        assert_eq!(rev_clusters.len(), clusters.len());
+        assert_eq!(rev_clusters[0].pings.len(), clusters[0].pings.len());
+        assert_eq!(rev_clusters[1].pings.len(), clusters[1].pings.len());
+    }
+
+    #[test]
+    fn large_poi_without_overlap_still_uses_containing_place() {
+        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
+        let mall = Place::new(
+            1,
+            vec![
+                Point::new(-0.002, -0.002),
+                Point::new(-0.002, 0.002),
+                Point::new(0.002, 0.002),
+                Point::new(0.002, -0.002),
+                Point::new(-0.002, -0.002),
+            ],
+            Point::new(0.0, 0.0),
+            None,
+            50_000.0,
+        );
+        let clusterer = LargePoiClusterer::new(cfg);
+        let pings = vec![
+            ping(0.001, 0.0, 0.0),
+            ping(0.0011, 0.0, 10.0),
+        ];
+        let (clusters, used) = clusterer.extract(&pings, &[mall]);
+        assert_eq!(used, vec![true, true]);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].pings.len(), 2);
     }
 
     #[test]
