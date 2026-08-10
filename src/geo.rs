@@ -38,12 +38,18 @@ fn ensure_closed(ring: &[Point]) -> Vec<Point> {
     out
 }
 
-/// Ray-casting point-in-polygon test for an exterior ring (holes unsupported).
+/// Point-in-polygon test for an exterior ring (holes unsupported).
+///
+/// Boundary-inclusive: points on edges or vertices count as inside. The open
+/// interior is decided by ray casting after an explicit on-edge check.
 #[must_use]
 pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
     let ring = ensure_closed(ring);
     if ring.len() < 4 {
         return false;
+    }
+    if point_on_ring_edge(point, &ring) {
+        return true;
     }
     let mut inside = false;
     let mut j = ring.len() - 1;
@@ -62,6 +68,27 @@ pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
         j = i;
     }
     inside
+}
+
+/// Absolute epsilon in degrees for on-edge collinearity / bbox padding.
+const ON_EDGE_DEG_EPS: f64 = 1e-12;
+
+fn point_on_segment(p: Point, a: Point, b: Point) -> bool {
+    let min_lat = a.lat.min(b.lat) - ON_EDGE_DEG_EPS;
+    let max_lat = a.lat.max(b.lat) + ON_EDGE_DEG_EPS;
+    let min_lon = a.lon.min(b.lon) - ON_EDGE_DEG_EPS;
+    let max_lon = a.lon.max(b.lon) + ON_EDGE_DEG_EPS;
+    if p.lat < min_lat || p.lat > max_lat || p.lon < min_lon || p.lon > max_lon {
+        return false;
+    }
+    let dlon = b.lon - a.lon;
+    let dlat = b.lat - a.lat;
+    let cross = dlon * (p.lat - a.lat) - dlat * (p.lon - a.lon);
+    cross.abs() <= ON_EDGE_DEG_EPS * (1.0 + dlon.abs() + dlat.abs())
+}
+
+fn point_on_ring_edge(point: Point, ring: &[Point]) -> bool {
+    ring.windows(2).any(|ab| point_on_segment(point, ab[0], ab[1]))
 }
 
 fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
@@ -92,7 +119,7 @@ fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
 
 /// Distance in meters from a point to the nearest location on a polygon.
 ///
-/// Returns `0.0` when the point lies inside the ring.
+/// Returns `0.0` when the point lies inside or on the boundary of the ring.
 #[must_use]
 pub fn distance_to_polygon_m(point: Point, ring: &[Point]) -> f64 {
     if point_in_polygon(point, ring) {
@@ -250,6 +277,20 @@ mod tests {
         let ring = unit_square();
         assert!(point_in_polygon(Point::new(0.0005, 0.0005), &ring));
         assert!(!point_in_polygon(Point::new(0.002, 0.002), &ring));
+    }
+
+    #[test]
+    fn point_on_boundary_counts_as_inside() {
+        let ring = unit_square();
+        // Mid-edges (Point is lat, lon).
+        assert!(point_in_polygon(Point::new(0.0005, 0.0), &ring)); // west
+        assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring)); // east
+        assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring)); // south
+        assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring)); // north
+        // Vertices.
+        assert!(point_in_polygon(Point::new(0.0, 0.0), &ring));
+        assert!(point_in_polygon(Point::new(0.001, 0.001), &ring));
+        assert!((distance_to_polygon_m(Point::new(0.0005, 0.0), &ring)).abs() < 1e-9);
     }
 
     #[test]
