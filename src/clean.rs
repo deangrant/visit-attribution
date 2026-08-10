@@ -61,16 +61,19 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
         return Vec::new();
     }
     let mut keep = vec![true; pings.len()];
+    let mut last_kept = 0usize;
     for i in 1..pings.len() {
-        let dt = pings[i].time_s - pings[i - 1].time_s;
+        let dt = pings[i].time_s - pings[last_kept].time_s;
         if dt <= 0.0 {
             keep[i] = false;
             continue;
         }
-        let dist = haversine_m(pings[i - 1].point, pings[i].point);
+        let dist = haversine_m(pings[last_kept].point, pings[i].point);
         if dist / dt > max_speed_m_s {
-            // Drop the later ping of an impossible jump.
+            // Drop the later ping of an impossible jump from the last kept.
             keep[i] = false;
+        } else {
+            last_kept = i;
         }
     }
     pings.iter().enumerate().filter_map(|(i, p)| keep[i].then_some(*p)).collect()
@@ -142,6 +145,20 @@ mod tests {
         // ~111 km in 1 second.
         let out = cleaner.clean(&[ping(0.0, 0.0, 0.0, 10.0), ping(1.0, 0.0, 1.0, 10.0)]);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn jump_filter_anchors_on_last_kept_ping() {
+        let cleaner = DefaultPingCleaner::new(Config::default());
+        // A kept; B impossible from A (dropped); C near B but still impossible from A.
+        let out = cleaner.clean(&[
+            ping(0.0, 0.0, 0.0, 10.0),
+            ping(1.0, 0.0, 1.0, 10.0),
+            ping(1.0001, 0.0, 2.0, 10.0),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert!((out[0].point.lat - 0.0).abs() < f64::EPSILON);
+        assert!((out[0].point.lon - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
