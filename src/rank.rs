@@ -113,13 +113,7 @@ impl Ranker for GbdtRanker {
         for i in 0..rows.len() {
             for j in (i + 1)..rows.len() {
                 diff.clear();
-                diff.extend(
-                    rows[i]
-                        .1
-                        .iter()
-                        .zip(rows[j].1.iter())
-                        .map(|(a, b)| a - b),
-                );
+                diff.extend(rows[i].1.iter().zip(rows[j].1.iter()).map(|(a, b)| a - b));
                 let score = self.model.predict_raw(&diff)?;
                 if score >= 0.0 {
                     wins[i] += 1;
@@ -129,11 +123,7 @@ impl Ranker for GbdtRanker {
             }
         }
         let best = (0..rows.len())
-            .max_by(|&a, &b| {
-                wins[a]
-                    .cmp(&wins[b])
-                    .then_with(|| rows[b].0.cmp(&rows[a].0))
-            })
+            .max_by(|&a, &b| wins[a].cmp(&wins[b]).then_with(|| rows[b].0.cmp(&rows[a].0)))
             .expect("rows non-empty");
         Ok((rows[best].0, wins[best]))
     }
@@ -171,7 +161,6 @@ mod tests {
             ],
             Point::new(lat + 0.0005, lon + 0.0005),
             Some(naics),
-            500.0,
         )
     }
 
@@ -183,7 +172,8 @@ mod tests {
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let examples = vec![LabeledExample {
             cluster: cluster.clone(),
             candidates: vec![near.clone(), far.clone()],
@@ -205,7 +195,8 @@ mod tests {
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let candidates = vec![
             near.clone(),
             mid.clone(),

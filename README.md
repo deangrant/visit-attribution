@@ -34,7 +34,6 @@ let place = Place::new(
     ],
     Point::new(0.0005, 0.0005),
     Some(445_110),
-    800.0,
 );
 let other = Place::new(
     2,
@@ -47,7 +46,6 @@ let other = Place::new(
     ],
     Point::new(0.0505, 0.0505),
     Some(445_110),
-    800.0,
 );
 let pings = vec![
     GpsPing::new(0.0004, 0.0004, 0.0, 5.0),

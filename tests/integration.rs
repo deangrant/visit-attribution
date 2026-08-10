@@ -17,7 +17,6 @@ fn store(id: u64, lat0: f64, lon0: f64, naics: u32) -> Place {
         ],
         Point::new(lat0 + 0.0004, lon0 + 0.0004),
         Some(naics),
-        2_000.0,
     )
 }
 

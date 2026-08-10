@@ -58,6 +58,9 @@ impl GpsPing {
 pub type PlaceId = u64;
 
 /// Point of interest with an exterior polygon ring.
+///
+/// Large-POI clustering derives footprint area from [`polygon`](Self::polygon)
+/// at cluster time (not a separate catalog area field).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Place {
     /// Caller-defined place identifier.
@@ -68,26 +71,17 @@ pub struct Place {
     pub centroid: Point,
     /// Optional NAICS code; first four digits drive time-of-day features.
     pub naics: Option<u32>,
-    /// Footprint area in square meters (used for the large-POI pass).
-    pub area_m2: f64,
 }
 
 impl Place {
-    /// Build a place from id, polygon, centroid, optional NAICS, and area.
+    /// Build a place from id, polygon, centroid, and optional NAICS.
     #[must_use]
-    pub fn new(
-        id: PlaceId,
-        polygon: Vec<Point>,
-        centroid: Point,
-        naics: Option<u32>,
-        area_m2: f64,
-    ) -> Self {
+    pub fn new(id: PlaceId, polygon: Vec<Point>, centroid: Point, naics: Option<u32>) -> Self {
         Self {
             id,
             polygon,
             centroid,
             naics,
-            area_m2,
         }
     }
 
@@ -177,13 +171,16 @@ mod tests {
 
     #[test]
     fn naics4_takes_most_significant_four_digits() {
-        let six = Place::new(1, vec![], Point::new(0.0, 0.0), Some(445_110), 1.0);
-        let five = Place::new(2, vec![], Point::new(0.0, 0.0), Some(44_511), 1.0);
-        let four = Place::new(3, vec![], Point::new(0.0, 0.0), Some(4_451), 1.0);
+        let six = Place::new(1, vec![], Point::new(0.0, 0.0), Some(445_110));
+        let five = Place::new(2, vec![], Point::new(0.0, 0.0), Some(44_511));
+        let four = Place::new(3, vec![], Point::new(0.0, 0.0), Some(4_451));
         assert_eq!(six.naics4(), Some(4_451));
         assert_eq!(five.naics4(), Some(4_451));
         assert_eq!(four.naics4(), Some(4_451));
-        assert_eq!(Place::new(4, vec![], Point::new(0.0, 0.0), None, 1.0).naics4(), None);
+        assert_eq!(
+            Place::new(4, vec![], Point::new(0.0, 0.0), None).naics4(),
+            None
+        );
     }
 
     #[test]

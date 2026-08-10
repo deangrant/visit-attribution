@@ -30,7 +30,6 @@
 //!     ],
 //!     Point::new(0.0005, 0.0005),
 //!     Some(445_110),
-//!     800.0,
 //! );
 //! let far = Place::new(
 //!     2,
@@ -43,7 +42,6 @@
 //!     ],
 //!     Point::new(0.0505, 0.0505),
 //!     Some(445_110),
-//!     800.0,
 //! );
 //! let cluster = Cluster::from_pings(vec![
 //!     GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
@@ -89,11 +87,11 @@ mod types;
 
 // Domain
 #[doc(inline)]
-pub use types::{Cluster, GpsPing, Place, PlaceId, Point, Visit};
-#[doc(inline)]
 pub use config::{Config, ConfigBuilder};
 #[doc(inline)]
 pub use error::{Error, Result};
+#[doc(inline)]
+pub use types::{Cluster, GpsPing, Place, PlaceId, Point, Visit};
 
 // Pipeline
 #[doc(inline)]
@@ -101,9 +99,9 @@ pub use features::{FeatureSchema, LabeledExample};
 #[doc(inline)]
 pub use gbdt::{GbdtModel, TrainConfig};
 #[doc(inline)]
-pub use rank::{GbdtRanker, Ranker};
-#[doc(inline)]
 pub use pipeline::{with_parts, AttributionResult, VisitAttributor, VisitAttributorBuilder};
+#[doc(inline)]
+pub use rank::{GbdtRanker, Ranker};
 
 // Extension (custom stage wiring via `with_parts`)
 #[doc(inline)]

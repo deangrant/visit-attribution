@@ -96,11 +96,7 @@ impl PlaceIndex for BruteForcePlaceIndex {
         if self.places.is_empty() {
             return Vec::new();
         }
-        let ha = cluster
-            .pings
-            .iter()
-            .map(|p| p.horizontal_accuracy_m)
-            .fold(0.0_f64, f64::max);
+        let ha = cluster.pings.iter().map(|p| p.horizontal_accuracy_m).fold(0.0_f64, f64::max);
         let radius = self.join_radius_m + ha;
         let probe = cluster_probe_ring(cluster, radius);
         let Some(query_bbox) = BBox::from_ring(&probe, 0.0) else {
@@ -228,7 +224,6 @@ mod tests {
             ],
             Point::new(lat0 + 0.0005, lon0 + 0.0005),
             Some(445_110),
-            1_000.0,
         )
     }
 
@@ -247,7 +242,6 @@ mod tests {
             ],
             Point::new(0.0007, 0.0007),
             None,
-            2_000.0,
         )
     }
 
@@ -260,7 +254,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
             GpsPing::new(0.0006, 0.0005, 30.0, 10.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 7);
@@ -274,7 +269,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0015, 0.0015, 0.0, 5.0),
             GpsPing::new(0.00155, 0.0015, 10.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         assert!(index.candidates(&cluster).is_empty());
     }
 
@@ -286,7 +282,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.00205, 0.0005, 0.0, 5.0),
             GpsPing::new(0.00206, 0.0005, 10.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 1);
@@ -304,7 +301,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
             GpsPing::new(0.00055, 0.0005, 20.0, 10.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 1);

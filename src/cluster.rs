@@ -1,7 +1,7 @@
 //! Clustering GPS pings into potential visits.
 
 use crate::config::Config;
-use crate::geo::{haversine_m, point_in_polygon};
+use crate::geo::{haversine_m, point_in_polygon, ring_area_m2};
 use crate::types::{Cluster, GpsPing, Place};
 
 /// Groups cleaned pings into visit candidates without ranking places.
@@ -19,8 +19,10 @@ pub trait Clusterer {
 
 /// First-pass clustering: consecutive pings inside large-area POI polygons.
 ///
-/// When a ping lies in multiple large POIs, the stay is attributed to the
-/// smallest-area place (lowest [`PlaceId`] on ties), not catalog iteration order.
+/// Footprint area is computed from each place's exterior ring via
+/// [`ring_area_m2`]. When a ping lies in multiple large POIs, the stay is
+/// attributed to the smallest computed area (lowest [`PlaceId`] on ties), not
+/// catalog iteration order.
 #[derive(Debug, Clone)]
 pub struct LargePoiClusterer {
     config: Config,
@@ -35,15 +37,18 @@ impl LargePoiClusterer {
 
     /// Extract large-POI clusters and a mask of consumed ping indices.
     ///
-    /// Overlapping large POIs resolve to smallest `area_m2`, then lowest place id.
+    /// Places qualify when their ring area is at least `large_poi_area_m2`.
+    /// Overlaps resolve to smallest ring area, then lowest place id.
     #[must_use]
     pub fn extract(&self, pings: &[GpsPing], places: &[Place]) -> (Vec<Cluster>, Vec<bool>) {
         let mut used = vec![false; pings.len()];
         if pings.is_empty() {
             return (Vec::new(), used);
         }
-        let large: Vec<&Place> =
-            places.iter().filter(|p| p.area_m2 >= self.config.large_poi_area_m2).collect();
+        let large: Vec<&Place> = places
+            .iter()
+            .filter(|p| ring_area_m2(&p.polygon) >= self.config.large_poi_area_m2)
+            .collect();
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
@@ -51,8 +56,8 @@ impl LargePoiClusterer {
                 .iter()
                 .filter(|place| point_in_polygon(pings[i].point, &place.polygon))
                 .min_by(|a, b| {
-                    a.area_m2
-                        .partial_cmp(&b.area_m2)
+                    ring_area_m2(&a.polygon)
+                        .partial_cmp(&ring_area_m2(&b.polygon))
                         .unwrap_or(std::cmp::Ordering::Equal)
                         .then_with(|| a.id.cmp(&b.id))
                 })
@@ -238,7 +243,6 @@ mod tests {
             ],
             Point::new(0.0, 0.0),
             None,
-            10_000.0,
         );
         let clusterer = TwoPassClusterer::new(cfg);
         let pings = vec![
@@ -266,7 +270,6 @@ mod tests {
             ],
             Point::new(0.0, 0.0),
             None,
-            50_000.0,
         );
         let plaza = Place::new(
             1,
@@ -279,7 +282,6 @@ mod tests {
             ],
             Point::new(0.0, 0.0),
             None,
-            5_000.0,
         );
         let pings = vec![
             // Inside both polygons.
@@ -320,13 +322,9 @@ mod tests {
             ],
             Point::new(0.0, 0.0),
             None,
-            50_000.0,
         );
         let clusterer = LargePoiClusterer::new(cfg);
-        let pings = vec![
-            ping(0.001, 0.0, 0.0),
-            ping(0.0011, 0.0, 10.0),
-        ];
+        let pings = vec![ping(0.001, 0.0, 0.0), ping(0.0011, 0.0, 10.0)];
         let (clusters, used) = clusterer.extract(&pings, &[mall]);
         assert_eq!(used, vec![true, true]);
         assert_eq!(clusters.len(), 1);
@@ -347,7 +345,6 @@ mod tests {
             ],
             Point::new(0.0, 0.0),
             None,
-            10_000.0,
         );
         let mall_start = 1_000.0;
         let mall_end = 1_010.0;
@@ -364,9 +361,7 @@ mod tests {
         ];
         let clusters = clusterer.cluster(&pings, &[mall]);
         assert_eq!(clusters.len(), 3);
-        assert!(!clusters
-            .iter()
-            .any(|c| c.start_time_s < mall_start && c.end_time_s > mall_end));
+        assert!(!clusters.iter().any(|c| c.start_time_s < mall_start && c.end_time_s > mall_end));
     }
 
     #[test]

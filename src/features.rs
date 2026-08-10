@@ -220,7 +220,6 @@ mod tests {
             ],
             Point::new(0.0005, 0.0005),
             naics,
-            100.0,
         )
     }
 
@@ -230,7 +229,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let a = bare_place(1, Some(445_110));
         let b = Place::new(
             2,
@@ -242,7 +242,6 @@ mod tests {
             ],
             Point::new(0.0105, 0.0105),
             Some(445_110),
-            100.0,
         );
         let rows = absolute_features(&schema, &cluster, &[a, b]);
         let pairs = preference_pairs(&rows, 1);
@@ -259,7 +258,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let true_place = bare_place(1, None);
         let a = Place::new(
             2,
@@ -271,7 +271,6 @@ mod tests {
             ],
             Point::new(0.0105, 0.0105),
             None,
-            100.0,
         );
         let b = Place::new(
             3,
@@ -283,19 +282,23 @@ mod tests {
             ],
             Point::new(0.0205, 0.0205),
             None,
-            100.0,
         );
         let rows = absolute_features(&schema, &cluster, &[true_place, a, b]);
         let pairs = preference_pairs(&rows, 1);
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|p| {
             (p.left_id == 1) != (p.right_id == 1)
-                && ((p.label - 1.0).abs() < f64::EPSILON
-                    || (p.label + 1.0).abs() < f64::EPSILON)
+                && ((p.label - 1.0).abs() < f64::EPSILON || (p.label + 1.0).abs() < f64::EPSILON)
         }));
         let mut distractors: Vec<_> = pairs
             .iter()
-            .map(|p| if p.left_id == 1 { p.right_id } else { p.left_id })
+            .map(|p| {
+                if p.left_id == 1 {
+                    p.right_id
+                } else {
+                    p.left_id
+                }
+            })
             .collect();
         distractors.sort_unstable();
         assert_eq!(distractors, vec![2, 3]);
@@ -314,7 +317,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 3_600.0, 5.0), // hour 1 if Unix-like epoch day
             GpsPing::new(0.0, 0.0, 3_610.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let hour = usize::from(cluster.hour_of_day());
         let unseen = bare_place(1, Some(722_515));
         let missing = bare_place(2, None);
@@ -342,7 +346,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let hour = usize::from(cluster.hour_of_day());
         let rare = bare_place(9, Some(722_515));
         let row = &absolute_features(&schema, &cluster, &[rare])[0].1;

@@ -17,7 +17,6 @@ fn square(id: u64, lat: f64, lon: f64, naics: u32) -> Place {
         ],
         Point::new(lat + 0.0005, lon + 0.0005),
         Some(naics),
-        800.0,
     )
 }
 
