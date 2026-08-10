@@ -1,0 +1,18 @@
+---
+description: GPS→POI pipeline domain gotchas for stage modules
+globs: "src/{clean,cluster,join,rank,features,geo,spatial,pipeline,config,types,error}.rs,src/gbdt/**/*.rs"
+alwaysApply: false
+---
+
+# Pipeline domain
+
+- Density clustering is time-aware / sequential—**not** DBSCAN. Large-POI pass
+  consumes matching pings before the density pass.
+- Effective join radius is `join_radius_m + max(ping horizontal accuracy)`.
+- Empty polygon rings → infinite distance → never join as candidates.
+- Longitude bounding boxes **do not** wrap the antimeridian.
+- `Cluster::hour_of_day()` is timezone-naive (`time_s` mod 86400).
+- Feature schema is frozen at train time; unknown NAICS maps to UNK; inference
+  uses pairwise tournament wins with lowest `PlaceId` on ties.
+- `geo` and `spatial` are crate-internal—do not re-export casually; do not
+  duplicate haversine / point-in-polygon math.

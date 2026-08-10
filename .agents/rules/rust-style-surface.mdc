@@ -1,0 +1,17 @@
+---
+description: Surface Rust style checklist for this crate
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Rust style surface
+
+- Line width **100**; method chains prefer `chain_width` **80** (`rustfmt.toml`).
+- Keep `.rs` files under ~**500** lines. `src/gbdt/mod.rs` and `src/cluster.rs`
+  are near the ceiling—extract modules instead of growing them.
+- Public items: `///` docs; modules: `//!`. Fallible pubs include `# Errors`.
+- Prefer `#[expect(...)]` over `#[allow(...)]` for intentional lint exceptions.
+- Match the Clippy allow-list in `Cargo.toml`; do not blanket-allow new lints.
+- Spaces only (4-space indent); trailing commas in multi-line lists; no trailing
+  whitespace; at most one blank line between items.
+- Single `#[derive(A, B, ...)]` attribute (not stacked derives).

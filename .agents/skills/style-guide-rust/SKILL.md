@@ -33,15 +33,15 @@ checklists.
 
 ## rustfmt Alignment
 
-Follow rustfmt defaults with these overrides:
+Align with checked-in `rustfmt.toml` (stable rustfmt):
 
 - Spaces only, never tabs; **indentation = 4 spaces**
-- `max_width = 100`, `comment_width = 100` (prefer wrapping prose at ~80)
+- `max_width = 100`, `chain_width = 80`
+- Prefer wrapping comment/prose near ~80 when readability benefits; do not
+  require nightly-only options (`comment_width`, `imports_granularity`,
+  `group_imports`) unless `rustfmt.toml` gains them
 - Trailing commas in multi-line lists/arrays/tuples/matches
-- `chain_width = 80` — avoid long method chains on one line
 - Block indentation style (not visual/aligned) for function args, structs, etc.
-- `imports_granularity = "Module"` (or `"Crate"` consistently)
-- `group_imports = "StdExternalCrate"`
 - **Single `#[derive(...)]` attribute**: one attribute with multiple traits
   comma-separated (e.g. `#[derive(Debug, Clone)]`), not multiple separate
   `#[derive(...)]` attributes. Order of derived names matters for tooling.

@@ -162,8 +162,8 @@ that encode business rules better expressed in tests and docs.
 
 **Well-segregated trait indicators**
 
-- [ ] Trait name reflects a **role** (`Readable`, `Switchable`,
-  `ExportRequest`).
+- [ ] Trait name reflects a **role** (`Readable`, `Switchable`, `PingCleaner`,
+  `Ranker`).
 - [ ] Each client’s `use` list is minimal; bounds match actual calls.
 - [ ] Same concrete type implements several small traits intentionally.
 

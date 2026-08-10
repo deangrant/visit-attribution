@@ -4,7 +4,7 @@
         "afterFileEdit": [
             {
                 "command": ".agents/hooks/rustfmt.sh",
-                "matcher": "Write|TabWrite"
+                "matcher": "Write|TabWrite|StrReplace"
             }
         ]
     }

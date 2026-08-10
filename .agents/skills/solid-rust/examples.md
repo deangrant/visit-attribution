@@ -219,68 +219,48 @@ client crate. Inversion keeps policy testable with `FakeRepo`.
 
 ---
 
-## Example 6: `ExportRequest` and `ChunkBuffer` (narrow API vs buffer ownership)
+## Example 6: Stage traits and `with_parts` (narrow pipeline boundaries)
 
-Illustrative names matching [SKILL.md](SKILL.md) §7: the export pipeline depends
-only on a **small trait** (`ExportRequest`), and chunking policy lives in
-**one** type (`ChunkBuffer`).
+Illustrative of this crate’s DIP/ISP surface: each pipeline stage is a small
+trait (`PingCleaner`, `Clusterer`, `PlaceIndex` / factory, `Ranker`). Defaults
+compose via `VisitAttributor::builder()`; custom wiring uses `with_parts`.
 
 ```rust
-/// What the export job needs from any document — not the whole domain surface (ISP).
-pub trait ExportRequest {
-    fn stable_name(&self) -> &str;
-    fn byte_length(&self) -> usize;
+pub trait PingCleaner {
+    fn clean(&self, pings: &[GpsPing], config: &Config) -> Vec<GpsPing>;
 }
 
-pub struct Document {
-    title: String,
-    body: Vec<u8>,
+pub trait Clusterer {
+    fn cluster(
+        &self,
+        pings: &[GpsPing],
+        places: &[Place],
+        config: &Config,
+    ) -> Result<Vec<Cluster>>;
 }
 
-impl ExportRequest for Document {
-    fn stable_name(&self) -> &str {
-        &self.title
-    }
-
-    fn byte_length(&self) -> usize {
-        self.body.len()
-    }
+pub trait Ranker {
+    fn rank(
+        &self,
+        cluster: &Cluster,
+        candidates: &[Place],
+    ) -> Result<Option<(PlaceId, u32)>>;
 }
 
-pub fn export_header(req: &dyn ExportRequest) -> String {
-    format!("{}:{}B", req.stable_name(), req.byte_length())
-}
-
-/// Owns the buffer and chunking rules; callers only see slices (SRP).
-pub struct ChunkBuffer {
-    data: Vec<u8>,
-    chunk_size: usize,
-}
-
-impl ChunkBuffer {
-    pub fn new(data: Vec<u8>, chunk_size: usize) -> Self {
-        assert!(chunk_size > 0, "chunk size must be positive");
-        Self { data, chunk_size }
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn chunk(&self, index: usize) -> Option<&[u8]> {
-        let start = index.checked_mul(self.chunk_size)?;
-        if start >= self.data.len() {
-            return None;
-        }
-        let end = (start + self.chunk_size).min(self.data.len());
-        Some(&self.data[start..end])
-    }
-}
+// High-level orchestration depends on traits, not concrete GBDT/geo details.
+pub fn with_parts(
+    cleaner: impl PingCleaner,
+    clusterer: impl Clusterer,
+    index_factory: impl PlaceIndexFactory,
+    ranker: impl Ranker,
+    config: Config,
+) -> VisitAttributor { /* ... */ }
 ```
 
-**Tie-back:** **`ExportRequest`** keeps the export boundary small (ISP).
-**`ChunkBuffer`** is the only place that decides how bytes are split; export
-code does not re-encode that policy (SRP).
+**Tie-back:** Stage traits keep each boundary small (ISP). `with_parts` inverts
+dependencies so tests and specialized catalogs can swap one stage without
+editing the others (DIP). Do not introduce a new trait when there is a single
+concrete type and no extension pressure.
 
 ---
 

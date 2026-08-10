@@ -240,8 +240,9 @@ can be unit-tested without databases or the network.
 ## 7. Cross-references
 
 - **Runnable patterns and teaching snippets:** [examples.md](examples.md) —
-  numbered examples for SRP through DIP, including patterns aligned with this
-  repository’s `ChunkBuffer` and `ExportRequest` traits.
+  numbered examples for SRP through DIP. In this crate, stage traits
+  (`PingCleaner`, `Clusterer`, `PlaceIndex`, `Ranker`) and `with_parts` are the
+  primary DIP/ISP boundaries.
 - **Checklists, tables, and quick lookup:** [reference.md](reference.md) —
   principle summary, expanded checklists per principle, “when to apply vs.
   overkill,” trait composition, and Rust-to-SOLID mapping.

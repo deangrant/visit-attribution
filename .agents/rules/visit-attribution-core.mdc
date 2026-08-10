@@ -1,0 +1,23 @@
+---
+description: Core visit-attribution crate constraints and verify loop
+alwaysApply: true
+---
+
+# visit-attribution core
+
+- **Std-first:** do not add `[dependencies]` without an explicit human ask.
+- `unsafe_code = forbid`. Clippy `all = deny`. CI runs
+  `cargo clippy --all-targets -- -D warnings`.
+- MSRV **1.74**. CI is stable-only—do not use post-1.74 syntax.
+- `Cargo.lock` is gitignored on purpose (library crate).
+- Verify before finishing Rust work:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test`
+- `VisitAttributor` requires a ranker. Training needs preference pairs (true
+  place among ≥2 candidates).
+- Prefer `codegraph_explore` with this project path before broad greps when
+  available.
+- **Precedence:** surgical edits over drive-by refactors; formatting via the
+  style skill + rustfmt hook; SOLID skill only when changing stage boundaries.
+- Ask before expanding public re-exports in `src/lib.rs`.
