@@ -1,4 +1,9 @@
 //! Spatial join between clusters and places.
+//!
+//! The default index accelerates lookups with a uniform degree hash grid only
+//! (no R-tree or other hierarchical structure). Dense catalogs may still cost
+//! near-linear polygon checks per query; implement [`PlaceIndex`] for larger
+//! scale.
 
 use std::collections::{HashMap, HashSet};
 
@@ -36,8 +41,12 @@ pub trait PlaceIndexFactory {
 
 /// Grid-accelerated place index with distance-based join matching.
 ///
-/// Public name kept for API stability; candidates are pruned by a uniform
-/// degree grid then confirmed with [`distance_to_polygon_m`].
+/// Public name kept for API stability. Candidates are pruned by a **uniform
+/// degree hash grid** over place bboxes, then confirmed with
+/// [`distance_to_polygon_m`]. There is no hierarchical spatial index (R-tree,
+/// quadtree, etc.): geographically dense catalogs can approach near-linear
+/// cost per query when many places share cells. For metro-scale catalogs,
+/// supply a custom [`PlaceIndex`] via [`PlaceIndexFactory`].
 #[derive(Debug, Clone)]
 pub struct BruteForcePlaceIndex {
     places: Vec<Place>,
@@ -126,7 +135,9 @@ impl PlaceIndex for BruteForcePlaceIndex {
     }
 }
 
-/// Factory for the default grid-accelerated place index.
+/// Factory for the default uniform-grid place index.
+///
+/// See [`BruteForcePlaceIndex`] for scaling limits.
 #[derive(Debug, Clone)]
 pub struct BruteForcePlaceIndexFactory {
     config: Config,

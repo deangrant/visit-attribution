@@ -93,6 +93,13 @@ cargo run --example basic
 | `large_poi_area_m2` | 50_000 | Large-POI first pass |
 | `join_radius_m` | 50 | Max distance from place polygon for join candidates |
 
+## Limitations
+
+The default place join uses a **uniform degree hash grid** over place bounding
+boxes (not an R-tree or other hierarchical spatial index). That is fine for
+moderate or geographically sparse catalogs. Dense metro-scale POI sets may need
+a custom `PlaceIndex` wired through `with_parts`.
+
 ## Model persistence
 
 ```rust
