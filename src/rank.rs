@@ -1,9 +1,7 @@
 //! Preference ranking and tournament scorecards.
 
 use crate::error::{Error, Result};
-use crate::features::{
-    absolute_features, inference_pairs, preference_pairs, FeatureSchema, LabeledExample,
-};
+use crate::features::{absolute_features, preference_pairs, FeatureSchema, LabeledExample};
 use crate::gbdt::{GbdtModel, TrainConfig};
 use crate::types::{Cluster, Place, PlaceId, Visit};
 
@@ -110,19 +108,34 @@ impl Ranker for GbdtRanker {
             return Ok((candidates[0].id, 0));
         }
         let rows = absolute_features(&self.model.schema, cluster, candidates);
-        let mut wins: Vec<(PlaceId, u32)> = rows.iter().map(|(id, _)| (*id, 0_u32)).collect();
-        for pair in inference_pairs(&rows) {
-            let score = self.model.predict_raw(&pair.diff)?;
-            if score >= 0.0 {
-                if let Some(entry) = wins.iter_mut().find(|(id, _)| *id == pair.left_id) {
-                    entry.1 += 1;
+        let mut wins = vec![0_u32; rows.len()];
+        let mut diff = Vec::with_capacity(self.model.schema.dim());
+        for i in 0..rows.len() {
+            for j in (i + 1)..rows.len() {
+                diff.clear();
+                diff.extend(
+                    rows[i]
+                        .1
+                        .iter()
+                        .zip(rows[j].1.iter())
+                        .map(|(a, b)| a - b),
+                );
+                let score = self.model.predict_raw(&diff)?;
+                if score >= 0.0 {
+                    wins[i] += 1;
+                } else {
+                    wins[j] += 1;
                 }
-            } else if let Some(entry) = wins.iter_mut().find(|(id, _)| *id == pair.right_id) {
-                entry.1 += 1;
             }
         }
-        wins.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        Ok(wins[0])
+        let best = (0..rows.len())
+            .max_by(|&a, &b| {
+                wins[a]
+                    .cmp(&wins[b])
+                    .then_with(|| rows[b].0.cmp(&rows[a].0))
+            })
+            .expect("rows non-empty");
+        Ok((rows[best].0, wins[best]))
     }
 }
 
@@ -179,5 +192,35 @@ mod tests {
         let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
         let (id, _) = ranker.rank(&cluster, &[near, far]).unwrap();
         assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn ranks_many_candidates_with_index_scorecard() {
+        let near = square(1, 0.0, 0.0, 445_110);
+        let mid = square(3, 0.02, 0.02, 445_110);
+        let far = square(5, 0.05, 0.05, 445_110);
+        let farther = square(2, 0.08, 0.08, 445_110);
+        let farthest = square(4, 0.1, 0.1, 445_110);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
+            GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
+            GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
+        ]);
+        let candidates = vec![
+            near.clone(),
+            mid.clone(),
+            far.clone(),
+            farther.clone(),
+            farthest.clone(),
+        ];
+        let examples = vec![LabeledExample {
+            cluster: cluster.clone(),
+            candidates: candidates.clone(),
+            true_place_id: 1,
+        }];
+        let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
+        let (id, wins) = ranker.rank(&cluster, &candidates).unwrap();
+        assert_eq!(id, 1);
+        assert!(wins >= 1);
     }
 }
