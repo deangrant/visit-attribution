@@ -133,7 +133,9 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
 /// Expand an exterior ring outward by approximately `buffer_m` meters.
 ///
 /// Each vertex is pushed away from the ring centroid in a local equirectangular
-/// frame. This is a join-padding heuristic, not a cadastral buffer.
+/// frame. This is a coarse visual/heuristic pad only—not a cadastral buffer and
+/// not used by the place join (join uses [`distance_to_polygon_m`] instead).
+/// Concave rings can self-intersect or fill notches incorrectly.
 #[must_use]
 pub fn buffer_ring(ring: &[Point], buffer_m: f64) -> Vec<Point> {
     if buffer_m <= 0.0 || ring.len() < 3 {
