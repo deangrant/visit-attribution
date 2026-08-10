@@ -196,7 +196,8 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
             GpsPing::new(0.0001, 0.0, 10.0, 10.0),
-        ]).unwrap();
+        ])
+        .unwrap();
         let attributor = with_parts(
             Config::default(),
             IdentityCleaner,
@@ -212,15 +213,20 @@ mod tests {
 
     #[test]
     fn with_parts_rejects_invalid_config() {
-        let mut config = Config::default();
-        config.max_time_gap_s = 0.0;
+        let config = Config {
+            max_time_gap_s: 0.0,
+            ..Config::default()
+        };
         let result = with_parts(
             config,
             IdentityCleaner,
-            FixedClusterer(Cluster::from_pings(vec![
-                GpsPing::new(0.0, 0.0, 0.0, 10.0),
-                GpsPing::new(0.0, 0.0, 1.0, 10.0),
-            ]).unwrap()),
+            FixedClusterer(
+                Cluster::from_pings(vec![
+                    GpsPing::new(0.0, 0.0, 0.0, 10.0),
+                    GpsPing::new(0.0, 0.0, 1.0, 10.0),
+                ])
+                .unwrap(),
+            ),
             EmptyIndexFactory,
             PanicRanker,
         );

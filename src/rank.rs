@@ -214,4 +214,103 @@ mod tests {
         assert_eq!(id, 1);
         assert!(wins >= 1);
     }
+
+    fn zero_score_ranker() -> GbdtRanker {
+        let text = "\
+VA_GBDT 1
+base 0
+lr 1
+dim 28
+naics
+trees 1
+L 0
+";
+        let path = std::env::temp_dir().join(format!(
+            "visit-attribution-zero-{}-{}.va",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, text).unwrap();
+        let model = GbdtModel::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        GbdtRanker::new(model)
+    }
+
+    fn cluster_near_origin() -> Cluster {
+        Cluster::from_pings(vec![
+            GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
+            GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn empty_candidates_returns_invalid_input() {
+        let ranker = zero_score_ranker();
+        let err = ranker.rank(&cluster_near_origin(), &[]).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn singleton_candidate_has_zero_wins() {
+        let ranker = zero_score_ranker();
+        let only = square(9, 0.0, 0.0, 445_110);
+        let (id, wins) = ranker.rank(&cluster_near_origin(), &[only]).unwrap();
+        assert_eq!(id, 9);
+        assert_eq!(wins, 0);
+    }
+
+    #[test]
+    fn win_count_tie_prefers_lowest_place_id() {
+        // Mirrors GbdtRanker::rank tie-break: max wins, then lowest PlaceId.
+        let wins = [1_u32, 1];
+        let ids = [5_u64, 2_u64];
+        let best = (0..wins.len())
+            .max_by(|&a, &b| wins[a].cmp(&wins[b]).then_with(|| ids[b].cmp(&ids[a])))
+            .unwrap();
+        assert_eq!(ids[best], 2);
+
+        // Through the ranker, a constant-zero scorer awards each pair to the
+        // lower index (score >= 0). With equal geometry, the first list entry
+        // uniquely leads — PlaceId only decides when win counts match.
+        let ranker = zero_score_ranker();
+        let a = square(5, 0.0, 0.0, 445_110);
+        let b = square(2, 0.0, 0.0, 445_110);
+        let (id, _) = ranker.rank(&cluster_near_origin(), &[a.clone(), b.clone()]).unwrap();
+        assert_eq!(id, 5);
+        let (id_rev, _) = ranker.rank(&cluster_near_origin(), &[b, a]).unwrap();
+        assert_eq!(id_rev, 2);
+    }
+
+    #[test]
+    fn duplicate_place_ids_are_accepted() {
+        // Duplicates are not rejected; both rows compete in the tournament.
+        let ranker = zero_score_ranker();
+        let place = square(3, 0.0, 0.0, 445_110);
+        let (id, wins) = ranker.rank(&cluster_near_origin(), &[place.clone(), place]).unwrap();
+        assert_eq!(id, 3);
+        assert_eq!(wins, 1);
+    }
+
+    #[test]
+    fn ranks_unseen_naics_via_unk_hour_block() {
+        let known = square(1, 0.0, 0.0, 445_110);
+        let distractor = square(2, 0.05, 0.05, 445_110);
+        let cluster = cluster_near_origin();
+        let examples = vec![LabeledExample {
+            cluster: cluster.clone(),
+            candidates: vec![known.clone(), distractor],
+            true_place_id: 1,
+        }];
+        let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
+        assert!(ranker.schema().naics4.contains(&4_451));
+        // Serve-time NAICS outside the frozen schema maps to the UNK hour block.
+        let unseen = square(1, 0.0, 0.0, 722_515);
+        let other = square(2, 0.05, 0.05, 722_515);
+        let (id, _) = ranker.rank(&cluster, &[unseen, other]).unwrap();
+        assert_eq!(id, 1);
+    }
 }

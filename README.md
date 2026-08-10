@@ -100,6 +100,13 @@ by polygon distance. Cost still scales with how many places fall in the local
 query neighborhood. Specialized catalogs can supply a custom `PlaceIndex` via
 `with_parts`.
 
+Additional join/geo caveats:
+
+- Longitude bounding boxes do **not** wrap the antimeridian.
+- Effective join radius is `join_radius_m + max(ping horizontal accuracy)`.
+- Places with an empty polygon are indexed by a centroid point bbox; distance to
+  an empty ring is infinite, so they will not match as join candidates.
+
 ## Model persistence
 
 ```rust

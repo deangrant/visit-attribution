@@ -304,4 +304,65 @@ mod tests {
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 1);
     }
+
+    #[test]
+    fn place_outside_join_radius_is_not_a_candidate() {
+        let cfg = Config::builder().join_radius_m(20.0).build().unwrap();
+        // ~111 m east of the place square at lon 0..0.001.
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[square(1, 0.0, 0.0)]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0005, 0.002, 0.0, 5.0),
+            GpsPing::new(0.0005, 0.0021, 10.0, 5.0),
+        ])
+        .unwrap();
+        assert!(index.candidates(&cluster).is_empty());
+    }
+
+    #[test]
+    fn empty_polygon_indexes_via_centroid_bbox() {
+        // Empty ring falls back to a centroid point bbox for indexing; distance
+        // to an empty ring is infinite, so the place is not a join candidate.
+        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
+        let empty = Place::new(1, vec![], Point::new(0.0005, 0.0005), None);
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[empty]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
+            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
+        ])
+        .unwrap();
+        assert!(index.candidates(&cluster).is_empty());
+    }
+
+    #[test]
+    fn large_horizontal_accuracy_expands_join_radius() {
+        let cfg = Config::builder().join_radius_m(20.0).build().unwrap();
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[square(1, 0.0, 0.0)]);
+        // Same geometry as outside-radius case, but HA widens effective radius.
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0005, 0.002, 0.0, 200.0),
+            GpsPing::new(0.0005, 0.0021, 10.0, 200.0),
+        ])
+        .unwrap();
+        let cands = index.candidates(&cluster);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].id, 1);
+    }
+
+    #[test]
+    fn overlapping_places_both_returned() {
+        let cfg = Config::builder().join_radius_m(50.0).build().unwrap();
+        let a = square(1, 0.0, 0.0);
+        let b = square(2, 0.0002, 0.0002);
+        let index = QuadtreePlaceIndexFactory::new(cfg).create(&[a, b]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0005, 0.0005, 0.0, 5.0),
+            GpsPing::new(0.00055, 0.0005, 10.0, 5.0),
+        ])
+        .unwrap();
+        let mut cands = index.candidates(&cluster);
+        cands.sort_by_key(|p| p.id);
+        assert_eq!(cands.len(), 2);
+        assert_eq!(cands[0].id, 1);
+        assert_eq!(cands[1].id, 2);
+    }
 }

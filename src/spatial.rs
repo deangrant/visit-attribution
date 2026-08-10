@@ -148,12 +148,7 @@ fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
     }
 }
 
-fn insert_into_children(
-    children: &mut [QuadNode; 4],
-    idx: usize,
-    bboxes: &[BBox],
-    depth: u8,
-) {
+fn insert_into_children(children: &mut [QuadNode; 4], idx: usize, bboxes: &[BBox], depth: u8) {
     let item = bboxes[idx];
     let mut hit = false;
     for child in children.iter_mut() {

@@ -298,7 +298,7 @@ mod tests {
         assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring)); // east
         assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring)); // south
         assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring)); // north
-        // Vertices.
+                                                                     // Vertices.
         assert!(point_in_polygon(Point::new(0.0, 0.0), &ring));
         assert!(point_in_polygon(Point::new(0.001, 0.001), &ring));
         assert!((distance_to_polygon_m(Point::new(0.0005, 0.0), &ring)).abs() < 1e-9);

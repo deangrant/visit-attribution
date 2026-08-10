@@ -194,4 +194,38 @@ mod tests {
         assert_eq!(dwell.len(), 3);
         assert!(out.len() < pings.len());
     }
+
+    #[test]
+    fn drops_non_finite_fields() {
+        let cleaner = DefaultPingCleaner::new(Config::default());
+        let good = ping(0.0, 0.0, 0.0, 10.0);
+        let out = cleaner.clean(&[
+            good,
+            ping(f64::NAN, 0.0, 1.0, 10.0),
+            ping(0.0, f64::INFINITY, 2.0, 10.0),
+            ping(0.0, 0.0, f64::NAN, 10.0),
+            ping(0.0, 0.0, 3.0, f64::NEG_INFINITY),
+            ping(0.00001, 0.0, 4.0, 10.0),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert!((out[0].time_s - 0.0).abs() < f64::EPSILON);
+        assert!((out[1].time_s - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn drops_equal_timestamps() {
+        // Cleaning sorts by time first; equal times yield dt <= 0 vs last kept.
+        let cleaner = DefaultPingCleaner::new(Config::default());
+        let out = cleaner.clean(&[
+            ping(0.0, 0.0, 0.0, 10.0),
+            ping(0.00001, 0.0, 0.0, 10.0), // equal time → drop
+            ping(0.00002, 0.0, 10.0, 10.0),
+            ping(0.00003, 0.0, 10.0, 10.0), // equal to last kept → drop
+            ping(0.00004, 0.0, 20.0, 10.0),
+        ]);
+        assert_eq!(out.len(), 3);
+        assert!((out[0].time_s - 0.0).abs() < f64::EPSILON);
+        assert!((out[1].time_s - 10.0).abs() < f64::EPSILON);
+        assert!((out[2].time_s - 20.0).abs() < f64::EPSILON);
+    }
 }

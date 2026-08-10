@@ -540,8 +540,7 @@ mod tests {
         let text = model.to_string_format();
         let loaded = GbdtModel::from_string_format(&text).unwrap();
         assert!(
-            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs()
-                < 1e-9
+            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs() < 1e-9
         );
     }
 
@@ -653,9 +652,63 @@ L 0
         let schema = FeatureSchema::new(vec![]);
         let xs = vec![row4(1.0), row4(-1.0)];
         let ys = vec![1.0, -1.0];
-        let mut config = TrainConfig::default();
-        config.n_trees = MAX_TREES + 1;
+        let config = TrainConfig {
+            n_trees: MAX_TREES + 1,
+            ..TrainConfig::default()
+        };
         let err = GbdtModel::train(schema, &xs, &ys, &config).unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn load_rejects_wrong_header() {
+        let text = "\
+VA_GBDT 2
+base 0
+lr 0.1
+dim 28
+naics
+trees 1
+L 0
+";
+        let err = GbdtModel::from_string_format(text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn load_rejects_truncated_tree_lines() {
+        let text = "\
+VA_GBDT 1
+base 0
+lr 0.1
+dim 28
+naics
+trees 2
+L 0
+";
+        let err = GbdtModel::from_string_format(text).unwrap_err();
+        assert!(matches!(err, Error::Model(_)));
+    }
+
+    #[test]
+    fn save_load_filesystem_round_trip() {
+        let schema = FeatureSchema::new(vec![]);
+        let xs = vec![row4(2.0), row4(-2.0)];
+        let ys = vec![1.0, -1.0];
+        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "visit-attribution-model-{}-{}.va",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        model.save(&path).unwrap();
+        let loaded = GbdtModel::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            (loaded.predict_raw(&xs[0]).unwrap() - model.predict_raw(&xs[0]).unwrap()).abs() < 1e-9
+        );
     }
 }
