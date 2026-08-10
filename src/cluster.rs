@@ -156,12 +156,21 @@ impl Clusterer for TwoPassClusterer {
             return Vec::new();
         }
         let (mut clusters, used) = self.large.extract(pings, places);
-        let remaining: Vec<GpsPing> = pings
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, p)| (!used[idx]).then_some(*p))
-            .collect();
-        clusters.extend(self.density.cluster(&remaining, &[]));
+        // Density-cluster each contiguous unused run so gaps left by the
+        // large-POI pass cannot merge non-adjacent stays into one visit.
+        let mut run_start: Option<usize> = None;
+        for (idx, &is_used) in used.iter().enumerate() {
+            if !is_used {
+                if run_start.is_none() {
+                    run_start = Some(idx);
+                }
+            } else if let Some(start) = run_start.take() {
+                clusters.extend(self.density.cluster(&pings[start..idx], &[]));
+            }
+        }
+        if let Some(start) = run_start {
+            clusters.extend(self.density.cluster(&pings[start..], &[]));
+        }
         clusters
     }
 }
@@ -216,6 +225,42 @@ mod tests {
         let clusters = clusterer.cluster(&pings, &[place]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 3);
+    }
+
+    #[test]
+    fn density_pass_does_not_merge_across_large_poi_gap() {
+        let cfg = Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap();
+        let mall = Place::new(
+            1,
+            vec![
+                Point::new(-0.001, -0.001),
+                Point::new(-0.001, 0.001),
+                Point::new(0.001, 0.001),
+                Point::new(0.001, -0.001),
+                Point::new(-0.001, -0.001),
+            ],
+            Point::new(0.0, 0.0),
+            None,
+            10_000.0,
+        );
+        let mall_start = 1_000.0;
+        let mall_end = 1_010.0;
+        let clusterer = TwoPassClusterer::new(cfg);
+        // Cafe → mall → same cafe. Without contiguous-run density, the two
+        // cafe stays compact into one visit spanning the mall.
+        let pings = vec![
+            ping(0.002, 0.0, 0.0),
+            ping(0.0021, 0.0, 10.0),
+            ping(0.0, 0.0, mall_start),
+            ping(0.0001, 0.0, mall_end),
+            ping(0.002, 0.0, 2_000.0),
+            ping(0.0021, 0.0, 2_010.0),
+        ];
+        let clusters = clusterer.cluster(&pings, &[mall]);
+        assert_eq!(clusters.len(), 3);
+        assert!(!clusters
+            .iter()
+            .any(|c| c.start_time_s < mall_start && c.end_time_s > mall_end));
     }
 
     #[test]
