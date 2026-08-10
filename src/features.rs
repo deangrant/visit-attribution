@@ -151,7 +151,10 @@ pub struct PreferencePair {
     pub right_id: PlaceId,
 }
 
-/// Expand absolute rows into preference pairs for a known true place.
+/// Expand absolute rows into unordered preference pairs for a known true place.
+///
+/// Emits one row per unordered candidate pair that involves the true place,
+/// matching [`inference_pairs`] orientation (`i < j`, `diff = left − right`).
 #[must_use]
 pub fn preference_pairs(
     rows: &[(PlaceId, Vec<f64>)],
@@ -159,10 +162,7 @@ pub fn preference_pairs(
 ) -> Vec<PreferencePair> {
     let mut pairs = Vec::new();
     for i in 0..rows.len() {
-        for j in 0..rows.len() {
-            if i == j {
-                continue;
-            }
+        for j in (i + 1)..rows.len() {
             let a_true = rows[i].0 == true_place_id;
             let b_true = rows[j].0 == true_place_id;
             let label = if a_true && !b_true {
@@ -170,11 +170,8 @@ pub fn preference_pairs(
             } else if b_true && !a_true {
                 -1.0
             } else {
-                0.0
-            };
-            if label == 0.0 {
                 continue;
-            }
+            };
             let diff: Vec<f64> =
                 rows[i].1.iter().zip(rows[j].1.iter()).map(|(a, b)| a - b).collect();
             pairs.push(PreferencePair {
@@ -254,6 +251,54 @@ mod tests {
             (p.label - 1.0).abs() < f64::EPSILON || (p.label + 1.0).abs() < f64::EPSILON
         }));
         assert!(pairs.iter().all(|p| p.left_id == 1 || p.right_id == 1));
+    }
+
+    #[test]
+    fn preference_pairs_emit_one_unordered_pair_per_distractor() {
+        let schema = FeatureSchema::new(vec![]);
+        let cluster = Cluster::from_pings(vec![
+            GpsPing::new(0.0, 0.0, 0.0, 5.0),
+            GpsPing::new(0.0, 0.0, 10.0, 5.0),
+        ]);
+        let true_place = bare_place(1, None);
+        let a = Place::new(
+            2,
+            vec![
+                Point::new(0.01, 0.01),
+                Point::new(0.01, 0.011),
+                Point::new(0.011, 0.011),
+                Point::new(0.011, 0.01),
+            ],
+            Point::new(0.0105, 0.0105),
+            None,
+            100.0,
+        );
+        let b = Place::new(
+            3,
+            vec![
+                Point::new(0.02, 0.02),
+                Point::new(0.02, 0.021),
+                Point::new(0.021, 0.021),
+                Point::new(0.021, 0.02),
+            ],
+            Point::new(0.0205, 0.0205),
+            None,
+            100.0,
+        );
+        let rows = absolute_features(&schema, &cluster, &[true_place, a, b]);
+        let pairs = preference_pairs(&rows, 1);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.iter().all(|p| {
+            (p.left_id == 1) != (p.right_id == 1)
+                && ((p.label - 1.0).abs() < f64::EPSILON
+                    || (p.label + 1.0).abs() < f64::EPSILON)
+        }));
+        let mut distractors: Vec<_> = pairs
+            .iter()
+            .map(|p| if p.left_id == 1 { p.right_id } else { p.left_id })
+            .collect();
+        distractors.sort_unstable();
+        assert_eq!(distractors, vec![2, 3]);
     }
 
     #[test]
