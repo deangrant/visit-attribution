@@ -88,6 +88,7 @@ cargo run --example basic
 | `max_speed_m_s` | 50 | Drop impossible jumps |
 | `dist_threshold_m` | 80 | Cluster neighbor distance |
 | `max_dist_threshold_m` | 100 | Max jump within a cluster |
+| `max_time_gap_s` | 1_800 | Max gap between consecutive cluster pings |
 | `min_cluster_pings` | 2 | Minimum cluster size |
 | `large_poi_area_m2` | 50_000 | Large-POI first pass |
 | `join_buffer_m` | 50 | Place join padding |

@@ -98,6 +98,7 @@ impl Clusterer for TimeAwareDbscan {
         }
         let dist_threshold_m = self.config.dist_threshold_m;
         let max_dist_threshold_m = self.config.max_dist_threshold_m;
+        let max_time_gap_s = self.config.max_time_gap_s;
         let min_cluster_pings = self.config.min_cluster_pings;
         let mut clusters = Vec::new();
         let mut i = 0usize;
@@ -107,6 +108,9 @@ impl Clusterer for TimeAwareDbscan {
             i += 1;
             while i < pings.len() {
                 let cur = pings[i];
+                if cur.time_s - last.time_s > max_time_gap_s {
+                    break;
+                }
                 let to_last = haversine_m(last.point, cur.point);
                 if to_last > max_dist_threshold_m {
                     break;
@@ -273,5 +277,33 @@ mod tests {
         ];
         let clusters = density.cluster(&pings, &[]);
         assert_eq!(clusters.len(), 1);
+    }
+
+    #[test]
+    fn density_breaks_on_large_temporal_gap() {
+        let density = TimeAwareDbscan::new(Config::default());
+        // Same place morning then evening: must not merge across the gap.
+        let pings = vec![
+            ping(0.0, 0.0, 0.0),
+            ping(0.0001, 0.0, 10.0),
+            ping(0.0, 0.0, 10_000.0),
+            ping(0.0001, 0.0, 10_010.0),
+        ];
+        let clusters = density.cluster(&pings, &[]);
+        assert_eq!(clusters.len(), 2);
+        assert!(!clusters.iter().any(|c| c.start_time_s < 10.0 && c.end_time_s > 10_000.0));
+    }
+
+    #[test]
+    fn density_keeps_short_gaps_in_one_cluster() {
+        let density = TimeAwareDbscan::new(Config::default());
+        let pings = vec![
+            ping(0.0, 0.0, 0.0),
+            ping(0.0001, 0.0, 30.0),
+            ping(0.0, 0.0001, 60.0),
+        ];
+        let clusters = density.cluster(&pings, &[]);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].pings.len(), 3);
     }
 }

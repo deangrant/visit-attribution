@@ -19,6 +19,8 @@ pub struct Config {
     pub dist_threshold_m: f64,
     /// Max distance (m) from the last ping before the cluster breaks.
     pub max_dist_threshold_m: f64,
+    /// Max seconds between consecutive pings before a density cluster breaks.
+    pub max_time_gap_s: f64,
     /// Minimum pings required to form a density cluster.
     pub min_cluster_pings: usize,
     /// Places with area at or above this (m²) use the large-POI pass.
@@ -37,6 +39,7 @@ impl Default for Config {
             driving_speed_m_s: 8.0,
             dist_threshold_m: 80.0,
             max_dist_threshold_m: 100.0,
+            max_time_gap_s: 1_800.0,
             min_cluster_pings: 2,
             large_poi_area_m2: 50_000.0,
             join_buffer_m: 50.0,
@@ -69,6 +72,7 @@ impl Config {
             ("driving_speed_m_s", self.driving_speed_m_s, false),
             ("dist_threshold_m", self.dist_threshold_m, false),
             ("max_dist_threshold_m", self.max_dist_threshold_m, false),
+            ("max_time_gap_s", self.max_time_gap_s, false),
             ("large_poi_area_m2", self.large_poi_area_m2, false),
             ("join_buffer_m", self.join_buffer_m, true),
         ] {
@@ -148,6 +152,12 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the max seconds between consecutive pings within a density cluster.
+    pub fn max_time_gap_s(mut self, v: f64) -> Self {
+        self.config.max_time_gap_s = v;
+        self
+    }
+
     /// Set the minimum number of pings required to form a cluster.
     pub fn min_cluster_pings(mut self, v: usize) -> Self {
         self.config.min_cluster_pings = v;
@@ -193,6 +203,12 @@ mod tests {
             .max_dist_threshold_m(50.0)
             .build()
             .unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn rejects_non_positive_max_time_gap() {
+        let err = Config::builder().max_time_gap_s(0.0).build().unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)));
     }
 }
