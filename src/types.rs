@@ -1,0 +1,162 @@
+//! Core GPS, place, cluster, and visit value types.
+
+/// Geographic coordinate in WGS84 degrees (latitude, longitude).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    /// Latitude in degrees.
+    pub lat: f64,
+    /// Longitude in degrees.
+    pub lon: f64,
+}
+
+impl Point {
+    /// Create a point from latitude and longitude in degrees.
+    #[must_use]
+    pub fn new(lat: f64, lon: f64) -> Self {
+        Self { lat, lon }
+    }
+}
+
+impl From<[f64; 2]> for Point {
+    fn from(value: [f64; 2]) -> Self {
+        Self::new(value[0], value[1])
+    }
+}
+
+impl From<(f64, f64)> for Point {
+    fn from(value: (f64, f64)) -> Self {
+        Self::new(value.0, value.1)
+    }
+}
+
+/// A single GPS observation from a device trajectory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpsPing {
+    /// Observed location.
+    pub point: Point,
+    /// Timestamp in seconds (Unix or any monotonic epoch).
+    pub time_s: f64,
+    /// Reported horizontal accuracy in meters.
+    pub horizontal_accuracy_m: f64,
+}
+
+impl GpsPing {
+    /// Create a ping from lat, lon, time (seconds), and horizontal accuracy.
+    #[must_use]
+    pub fn new(lat: f64, lon: f64, time_s: f64, horizontal_accuracy_m: f64) -> Self {
+        Self {
+            point: Point::new(lat, lon),
+            time_s,
+            horizontal_accuracy_m,
+        }
+    }
+}
+
+/// Stable identifier for a place of interest.
+pub type PlaceId = u64;
+
+/// Point of interest with an exterior polygon ring.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Place {
+    /// Caller-defined place identifier.
+    pub id: PlaceId,
+    /// Closed or open exterior ring in WGS84 degrees.
+    pub polygon: Vec<Point>,
+    /// Representative centroid (caller-supplied or geometric).
+    pub centroid: Point,
+    /// Optional NAICS code; first four digits drive time-of-day features.
+    pub naics: Option<u32>,
+    /// Footprint area in square meters (used for the large-POI pass).
+    pub area_m2: f64,
+}
+
+impl Place {
+    /// Build a place from id, polygon, centroid, optional NAICS, and area.
+    #[must_use]
+    pub fn new(
+        id: PlaceId,
+        polygon: Vec<Point>,
+        centroid: Point,
+        naics: Option<u32>,
+        area_m2: f64,
+    ) -> Self {
+        Self {
+            id,
+            polygon,
+            centroid,
+            naics,
+            area_m2,
+        }
+    }
+
+    /// Four-digit NAICS prefix, if a NAICS code is present.
+    #[must_use]
+    pub fn naics4(&self) -> Option<u32> {
+        self.naics.map(|n| n / 100)
+    }
+}
+
+/// A density cluster of GPS pings treated as one potential visit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cluster {
+    /// Pings assigned to this cluster (time-ordered).
+    pub pings: Vec<GpsPing>,
+    /// Mean lat/lon of member pings.
+    pub centroid: Point,
+    /// Start time in seconds (min ping time).
+    pub start_time_s: f64,
+    /// End time in seconds (max ping time).
+    pub end_time_s: f64,
+}
+
+impl Cluster {
+    /// Build a cluster from pings; empty input yields a zeroed placeholder.
+    #[must_use]
+    pub fn from_pings(pings: Vec<GpsPing>) -> Self {
+        if pings.is_empty() {
+            return Self {
+                pings,
+                centroid: Point::new(0.0, 0.0),
+                start_time_s: 0.0,
+                end_time_s: 0.0,
+            };
+        }
+        let n = pings.len() as f64;
+        let lat = pings.iter().map(|p| p.point.lat).sum::<f64>() / n;
+        let lon = pings.iter().map(|p| p.point.lon).sum::<f64>() / n;
+        let start_time_s = pings.iter().map(|p| p.time_s).fold(f64::INFINITY, f64::min);
+        let end_time_s = pings.iter().map(|p| p.time_s).fold(f64::NEG_INFINITY, f64::max);
+        Self {
+            pings,
+            centroid: Point::new(lat, lon),
+            start_time_s,
+            end_time_s,
+        }
+    }
+
+    /// Duration of the cluster in seconds.
+    #[must_use]
+    pub fn duration_s(&self) -> f64 {
+        (self.end_time_s - self.start_time_s).max(0.0)
+    }
+
+    /// Hour of day (0–23) from `start_time_s`, treating the value as Unix time.
+    #[must_use]
+    pub fn hour_of_day(&self) -> u8 {
+        let hour = ((self.start_time_s.floor() as i64).rem_euclid(86_400) / 3600) as u8;
+        hour.min(23)
+    }
+}
+
+/// A cluster attributed to a single place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Visit {
+    /// Source cluster.
+    pub cluster: Cluster,
+    /// Chosen place id.
+    pub place_id: PlaceId,
+    /// Tournament wins for the chosen place (among candidates).
+    pub wins: u32,
+    /// Candidate place ids considered for this cluster.
+    pub candidates: Vec<PlaceId>,
+}

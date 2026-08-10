@@ -1,0 +1,11 @@
+{
+    "version": 1,
+    "hooks": {
+        "afterFileEdit": [
+            {
+                "command": ".agents/hooks/rustfmt.sh",
+                "matcher": "Write|TabWrite"
+            }
+        ]
+    }
+}
