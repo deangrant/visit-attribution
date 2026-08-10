@@ -260,7 +260,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
             GpsPing::new(0.0006, 0.0005, 30.0, 10.0),
-        ]);
+        ]).unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 7);
@@ -274,7 +274,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0015, 0.0015, 0.0, 5.0),
             GpsPing::new(0.00155, 0.0015, 10.0, 5.0),
-        ]);
+        ]).unwrap();
         assert!(index.candidates(&cluster).is_empty());
     }
 
@@ -286,7 +286,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.00205, 0.0005, 0.0, 5.0),
             GpsPing::new(0.00206, 0.0005, 10.0, 5.0),
-        ]);
+        ]).unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 1);
@@ -304,7 +304,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0005, 0.0005, 0.0, 10.0),
             GpsPing::new(0.00055, 0.0005, 20.0, 10.0),
-        ]);
+        ]).unwrap();
         let cands = index.candidates(&cluster);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].id, 1);

@@ -230,7 +230,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]);
+        ]).unwrap();
         let a = bare_place(1, Some(445_110));
         let b = Place::new(
             2,
@@ -259,7 +259,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]);
+        ]).unwrap();
         let true_place = bare_place(1, None);
         let a = Place::new(
             2,
@@ -314,7 +314,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 3_600.0, 5.0), // hour 1 if Unix-like epoch day
             GpsPing::new(0.0, 0.0, 3_610.0, 5.0),
-        ]);
+        ]).unwrap();
         let hour = usize::from(cluster.hour_of_day());
         let unseen = bare_place(1, Some(722_515));
         let missing = bare_place(2, None);
@@ -342,7 +342,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ]);
+        ]).unwrap();
         let hour = usize::from(cluster.hour_of_day());
         let rare = bare_place(9, Some(722_515));
         let row = &absolute_features(&schema, &cluster, &[rare])[0].1;

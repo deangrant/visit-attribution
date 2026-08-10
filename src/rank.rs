@@ -183,7 +183,7 @@ mod tests {
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ]);
+        ]).unwrap();
         let examples = vec![LabeledExample {
             cluster: cluster.clone(),
             candidates: vec![near.clone(), far.clone()],
@@ -205,7 +205,7 @@ mod tests {
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ]);
+        ]).unwrap();
         let candidates = vec![
             near.clone(),
             mid.clone(),

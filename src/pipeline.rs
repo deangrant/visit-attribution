@@ -196,7 +196,7 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
             GpsPing::new(0.0001, 0.0, 10.0, 10.0),
-        ]);
+        ]).unwrap();
         let attributor = with_parts(
             Config::default(),
             IdentityCleaner,
@@ -220,7 +220,7 @@ mod tests {
             FixedClusterer(Cluster::from_pings(vec![
                 GpsPing::new(0.0, 0.0, 0.0, 10.0),
                 GpsPing::new(0.0, 0.0, 1.0, 10.0),
-            ])),
+            ]).unwrap()),
             EmptyIndexFactory,
             PanicRanker,
         );

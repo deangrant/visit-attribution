@@ -31,7 +31,7 @@ fn attributes_visit_to_trained_place() {
         GpsPing::new(0.00035, 0.0004, 40.0, 5.0),
         GpsPing::new(0.00045, 0.0003, 60.0, 5.0),
     ];
-    let cluster = Cluster::from_pings(pings.clone());
+    let cluster = Cluster::from_pings(pings.clone()).unwrap();
     let ranker = GbdtRanker::train(
         &[LabeledExample {
             cluster,

@@ -29,7 +29,7 @@ fn main() {
         GpsPing::new(51.5005, -0.1195, 1_700_000_030.0, 8.0),
         GpsPing::new(51.50045, -0.11955, 1_700_000_060.0, 8.0),
     ];
-    let cluster = Cluster::from_pings(pings.clone());
+    let cluster = Cluster::from_pings(pings.clone()).unwrap();
     let ranker = GbdtRanker::train(
         &[LabeledExample {
             cluster: cluster.clone(),

@@ -54,7 +54,7 @@ let pings = vec![
     GpsPing::new(0.0005, 0.0005, 30.0, 5.0),
     GpsPing::new(0.00055, 0.00045, 60.0, 5.0),
 ];
-let cluster = Cluster::from_pings(pings.clone());
+let cluster = Cluster::from_pings(pings.clone())?;
 let ranker = GbdtRanker::train(
     &[LabeledExample {
         cluster,

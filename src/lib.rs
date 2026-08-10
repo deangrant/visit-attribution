@@ -45,7 +45,8 @@
 //!     GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
 //!     GpsPing::new(0.0005, 0.0005, 30.0, 5.0),
 //!     GpsPing::new(0.00055, 0.00045, 60.0, 5.0),
-//! ]);
+//! ])
+//! .unwrap();
 //! let ranker = GbdtRanker::train(
 //!     &[LabeledExample {
 //!         cluster: cluster.clone(),

@@ -1,5 +1,7 @@
 //! Core GPS, place, cluster, and visit value types.
 
+use crate::error::{Error, Result};
+
 /// Geographic coordinate in WGS84 degrees (latitude, longitude).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -118,28 +120,28 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    /// Build a cluster from pings; empty input yields a zeroed placeholder.
-    #[must_use]
-    pub fn from_pings(pings: Vec<GpsPing>) -> Self {
+    /// Build a cluster from one or more pings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidInput`] when `pings` is empty.
+    pub fn from_pings(pings: Vec<GpsPing>) -> Result<Self> {
         if pings.is_empty() {
-            return Self {
-                pings,
-                centroid: Point::new(0.0, 0.0),
-                start_time_s: 0.0,
-                end_time_s: 0.0,
-            };
+            return Err(Error::InvalidInput(
+                "cluster requires at least one ping".into(),
+            ));
         }
         let n = pings.len() as f64;
         let lat = pings.iter().map(|p| p.point.lat).sum::<f64>() / n;
         let lon = pings.iter().map(|p| p.point.lon).sum::<f64>() / n;
         let start_time_s = pings.iter().map(|p| p.time_s).fold(f64::INFINITY, f64::min);
         let end_time_s = pings.iter().map(|p| p.time_s).fold(f64::NEG_INFINITY, f64::max);
-        Self {
+        Ok(Self {
             pings,
             centroid: Point::new(lat, lon),
             start_time_s,
             end_time_s,
-        }
+        })
     }
 
     /// Duration of the cluster in seconds.
@@ -182,5 +184,20 @@ mod tests {
         assert_eq!(five.naics4(), Some(4_451));
         assert_eq!(four.naics4(), Some(4_451));
         assert_eq!(Place::new(4, vec![], Point::new(0.0, 0.0), None, 1.0).naics4(), None);
+    }
+
+    #[test]
+    fn from_pings_rejects_empty() {
+        let err = Cluster::from_pings(vec![]).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn from_pings_uses_single_ping_as_centroid() {
+        let ping = GpsPing::new(1.5, -2.5, 10.0, 5.0);
+        let cluster = Cluster::from_pings(vec![ping]).unwrap();
+        assert_eq!(cluster.centroid, Point::new(1.5, -2.5));
+        assert_eq!(cluster.start_time_s, 10.0);
+        assert_eq!(cluster.end_time_s, 10.0);
     }
 }

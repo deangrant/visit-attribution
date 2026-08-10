@@ -64,7 +64,10 @@ impl LargePoiClusterer {
                 for flag in &mut used[start..i] {
                     *flag = true;
                 }
-                clusters.push(Cluster::from_pings(pings[start..i].to_vec()));
+                clusters.push(
+                    Cluster::from_pings(pings[start..i].to_vec())
+                        .expect("min_cluster_pings ensures non-empty"),
+                );
             }
         }
         (clusters, used)
@@ -132,7 +135,9 @@ impl Clusterer for TimeAwareDensityClusterer {
                 i += 1;
             }
             if members.len() >= min_cluster_pings {
-                clusters.push(Cluster::from_pings(members));
+                clusters.push(
+                    Cluster::from_pings(members).expect("min_cluster_pings ensures non-empty"),
+                );
             }
         }
         clusters
