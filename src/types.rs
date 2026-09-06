@@ -243,6 +243,9 @@ mod tests {
         assert_eq!(cluster.centroid, Point::new(1.5, -2.5));
         assert!((cluster.start_time_s - 10.0).abs() < f64::EPSILON);
         assert!((cluster.end_time_s - 10.0).abs() < f64::EPSILON);
+        assert!((cluster.duration_s()).abs() < f64::EPSILON);
+        assert_eq!(Point::from([1.5, -2.5]), Point::new(1.5, -2.5));
+        assert_eq!(Point::from((1.5, -2.5)), Point::new(1.5, -2.5));
         Ok(())
     }
 

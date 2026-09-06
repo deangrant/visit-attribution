@@ -165,6 +165,9 @@ fn within_join_radius(cluster: &Cluster, place: &Place, radius: f64) -> bool {
 }
 
 fn cluster_probe_ring(cluster: &Cluster, radius_m: f64) -> Vec<Point> {
+    if cluster.pings.is_empty() {
+        return Vec::new();
+    }
     // Represent the cluster as a small ring around the centroid for bbox queries.
     let (dlat, dlon) = meters_to_degrees(cluster.centroid.lat, radius_m.max(1.0));
     let c = cluster.centroid;
@@ -233,7 +236,9 @@ mod tests {
     fn finds_nearby_place() -> Result<()> {
         let place = square(7, 0.0, 0.0);
         let cluster = two_ping_cluster(0.0005, 0.0005, 10.0)?;
-        assert_one_candidate(&candidates_for(Config::default(), &[place], &cluster), 7);
+        let index = QuadtreePlaceIndex::new(vec![place], &Config::default());
+        assert_eq!(index.places().len(), 1);
+        assert_one_candidate(&index.candidates(&cluster), 7);
         Ok(())
     }
 
@@ -335,6 +340,29 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0].id, 1);
         assert_eq!(cands[1].id, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_cluster_pings_yield_no_candidates() -> Result<()> {
+        let place = square(1, 0.0, 0.0);
+        let index = QuadtreePlaceIndex::new(vec![place], &Config::default());
+        let empty = Cluster {
+            pings: Vec::new(),
+            centroid: Point::new(0.0005, 0.0005),
+            start_time_s: 0.0,
+            end_time_s: 0.0,
+        };
+        assert!(index.candidates(&empty).is_empty());
+        let cluster = two_ping_cluster(0.0005, 0.0005, 5.0)?;
+        let bbox = crate::test_util::some(BBox::from_ring(
+            &cluster.pings.iter().map(|p| p.point).collect::<Vec<_>>(),
+            0.0,
+        ))?;
+        let mut seen = std::collections::HashSet::new();
+        assert!(index.accept_hit(0, bbox, &mut seen, 50.0, &cluster).is_some());
+        assert!(index.accept_hit(0, bbox, &mut seen, 50.0, &cluster).is_none());
+        assert!(index.accept_hit(99, bbox, &mut seen, 50.0, &cluster).is_none());
         Ok(())
     }
 }

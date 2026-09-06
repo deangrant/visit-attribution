@@ -77,9 +77,7 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
     let mut keep = vec![true; pings.len()];
     let mut last_kept = 0usize;
     for (i, ping) in pings.iter().enumerate().skip(1) {
-        let Some(prev) = pings.get(last_kept) else {
-            break;
-        };
+        let prev = pings[last_kept];
         let dt = ping.time_s - prev.time_s;
         if dt <= 0.0 {
             clear_keep(&mut keep, i);
@@ -98,11 +96,8 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
 
 fn window_path_m(window: &[GpsPing]) -> f64 {
     let mut path = 0.0;
-    for hop in window.windows(2) {
-        let [a, b] = hop else {
-            continue;
-        };
-        path += haversine_m(a.point, b.point);
+    for i in 1..window.len() {
+        path += haversine_m(window[i - 1].point, window[i].point);
     }
     path
 }
@@ -114,32 +109,25 @@ fn mark_fast_arrivals(
     driving_speed_m_s: f64,
     drop: &mut [bool],
 ) {
-    for abs_idx in left..right {
-        let Some(hop) = pings.get(abs_idx..=abs_idx + 1) else {
-            continue;
-        };
-        let [a, b] = hop else {
-            continue;
-        };
+    let last = pings.len().saturating_sub(1);
+    for abs_idx in left..right.min(last) {
+        let a = pings[abs_idx];
+        let b = pings[abs_idx + 1];
         let hop_dt = (b.time_s - a.time_s).max(1e-6);
         let hop_m = haversine_m(a.point, b.point);
         if hop_m / hop_dt >= driving_speed_m_s {
-            if let Some(flag) = drop.get_mut(abs_idx + 1) {
-                *flag = true;
-            }
+            drop[abs_idx + 1] = true;
         }
     }
 }
 
 fn advance_window_left(pings: &[GpsPing], left: &mut usize, right: usize, window_s: f64) {
-    let Some(right_ping) = pings.get(right) else {
+    if right >= pings.len() {
         return;
-    };
+    }
+    let right_ping = pings[right];
     while *left < right {
-        let Some(left_ping) = pings.get(*left) else {
-            break;
-        };
-        if right_ping.time_s - left_ping.time_s <= window_s {
+        if right_ping.time_s - pings[*left].time_s <= window_s {
             break;
         }
         *left += 1;
@@ -176,9 +164,7 @@ fn filter_driving(
         if right - left + 1 < 3 {
             continue;
         }
-        let Some(window) = pings.get(left..=right) else {
-            continue;
-        };
+        let window = &pings[left..=right];
         if window_is_driving(window, linearity_threshold, driving_speed_m_s) {
             // Drop only arrivals on fast hops so dwell edges in the window survive.
             mark_fast_arrivals(pings, left, right, driving_speed_m_s, &mut drop);
@@ -317,5 +303,27 @@ mod tests {
             GpsPing::new(0.0, 0.0, 20.0, 10.0),
         ];
         assert_eq!(filter_driving(&dwell, 1.15, 60.0, 8.0).len(), 3);
+        assert!(!window_is_driving(&[], 1.15, 8.0));
+        let mut drop = [false, false];
+        mark_fast_arrivals(
+            &[
+                GpsPing::new(0.0, 0.0, 0.0, 10.0),
+                GpsPing::new(0.0, 0.0, 10.0, 10.0),
+            ],
+            0,
+            1,
+            8.0,
+            &mut drop,
+        );
+        assert!(!drop[1]);
+        let mut left = 0usize;
+        advance_window_left(&[], &mut left, 0, 60.0);
+        assert_eq!(left, 0);
+        let span = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0, 0.0, 100.0, 10.0),
+        ];
+        advance_window_left(&span, &mut left, 1, 60.0);
+        assert_eq!(left, 1);
     }
 }

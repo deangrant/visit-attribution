@@ -205,6 +205,7 @@ mod tests {
     #[test]
     fn default_config_validates() -> Result<()> {
         Config::default().validate()?;
+        assert_eq!(ConfigBuilder::new().build()?, Config::default());
         Ok(())
     }
 

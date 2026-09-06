@@ -373,7 +373,24 @@ mod tests {
         assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "X 0"))?;
         assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "L"))?;
         assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 0"))?;
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "L 0 extra"))?;
+        assert_model_err("VA_GBDT 1\nxxx 0\nlr 0.1\ndim 28\nnaics\ntrees 1\nL 0\n")?;
+        let mut nodes = 0usize;
+        let bushy = bushy_tree(13, &mut nodes, 8_193);
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, &bushy))?;
         Ok(())
+    }
+
+    fn bushy_tree(depth: usize, count: &mut usize, limit: usize) -> String {
+        *count += 1;
+        if *count >= limit || depth == 0 {
+            return "L 0".into();
+        }
+        format!(
+            "B 0 0 {} {}",
+            bushy_tree(depth - 1, count, limit),
+            bushy_tree(depth - 1, count, limit)
+        )
     }
 
     #[test]
@@ -404,6 +421,46 @@ mod tests {
             .abs()
                 < 1e-9
         );
+        Ok(())
+    }
+
+    #[test]
+    fn eval_tree_and_train_helpers_cover_oob_paths() -> Result<()> {
+        let branch = Node::Branch {
+            feature: 99,
+            threshold: 0.0,
+            left: Box::new(Node::Leaf { value: 1.0 }),
+            right: Box::new(Node::Leaf { value: -1.0 }),
+        };
+        let err = crate::test_util::err(eval_tree(&branch, &[0.0]))?;
+        assert!(matches!(err, Error::Model(_)));
+        let split = Node::Branch {
+            feature: 0,
+            threshold: -1.0,
+            left: Box::new(Node::Leaf { value: 1.0 }),
+            right: Box::new(Node::Leaf { value: -1.0 }),
+        };
+        assert!((eval_tree(&split, &[0.0])? + 1.0).abs() < f64::EPSILON);
+        let xs = [vec![1.0, 0.0]];
+        let ys = [1.0];
+        let (res, sample) = train::build_residuals(&xs, &ys, &[], &[0]);
+        assert!(res.is_empty() && sample.is_empty());
+        train::apply_tree(&mut [], &xs, &Node::Leaf { value: 0.0 }, 0.1)?;
+        let _leaf = train::build_tree(&[], &[], &TrainConfig::default(), 0);
+        let schema = FeatureSchema::new(vec![4451]);
+        let dim = schema.dim();
+        let row = |first: f64| {
+            let mut v = vec![0.0; dim];
+            v[0] = first;
+            v
+        };
+        let with_naics = GbdtModel::train(
+            schema,
+            &[row(2.0), row(-2.0)],
+            &[1.0, -1.0],
+            &TrainConfig::default(),
+        )?;
+        assert!(with_naics.to_string_format().contains("naics 4451"));
         Ok(())
     }
 }

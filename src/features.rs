@@ -140,13 +140,7 @@ fn ranks(values: &[f64]) -> Vec<f64> {
 fn tie_end(pairs: &[(f64, usize)], i: usize) -> usize {
     let mut j = i + 1;
     while j < pairs.len() {
-        let Some(left) = pairs.get(i) else {
-            break;
-        };
-        let Some(right) = pairs.get(j) else {
-            break;
-        };
-        if (right.0 - left.0).abs() >= 1e-9 {
+        if (pairs[j].0 - pairs[i].0).abs() >= 1e-9 {
             break;
         }
         j += 1;
@@ -318,6 +312,21 @@ mod tests {
         let schema = FeatureSchema::new(vec![4451]);
         assert_eq!(schema.dim(), 4 + 2 * 24);
         assert_eq!(FeatureSchema::new(vec![]).dim(), 4 + 24);
+        assert!(absolute_features(
+            &schema,
+            &Cluster {
+                pings: Vec::new(),
+                centroid: Point::new(0.0, 0.0),
+                start_time_s: 0.0,
+                end_time_s: 0.0,
+            },
+            &[]
+        )
+        .is_empty());
+        assert!(preference_pairs(&[(1, vec![0.0]), (2, vec![1.0])], 99).is_empty());
+        let flipped = preference_pairs(&[(2, vec![0.0]), (1, vec![1.0])], 1);
+        assert_eq!(flipped.len(), 1);
+        assert!((flipped[0].label + 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

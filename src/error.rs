@@ -57,6 +57,12 @@ mod tests {
         assert_eq!(inner.kind(), ErrorKind::NotFound);
         assert!(err.source().is_some());
         assert!(err.to_string().contains("missing model"));
+        let invalid = Error::InvalidInput("bad".into());
+        assert!(invalid.source().is_none());
+        assert!(invalid.to_string().contains("invalid input"));
+        let model = Error::Model("corrupt".into());
+        assert!(model.source().is_none());
+        assert!(model.to_string().contains("model error"));
         Ok(())
     }
 }

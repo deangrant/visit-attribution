@@ -16,3 +16,9 @@ pub fn err<T: std::fmt::Debug>(result: Result<T>) -> Result<Error> {
 pub fn some<T>(value: Option<T>) -> Result<T> {
     value.ok_or_else(|| Error::InvalidInput("expected Some".into()))
 }
+
+#[test]
+fn err_rejects_unexpected_ok() {
+    let mapped = err(Ok(1_u8));
+    assert!(mapped.is_err());
+}

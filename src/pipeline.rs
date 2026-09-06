@@ -212,6 +212,7 @@ mod tests {
         let result = attributor.attribute(&cluster.pings, &[])?;
         assert!(result.visits.is_empty());
         assert_eq!(result.unmatched_clusters, vec![cluster]);
+        assert_eq!(*attributor.config(), Config::default());
         Ok(())
     }
 

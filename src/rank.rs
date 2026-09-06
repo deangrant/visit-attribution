@@ -105,12 +105,7 @@ impl Ranker for GbdtRanker {
             ));
         }
         if candidates.len() == 1 {
-            let Some(only) = candidates.first() else {
-                return Err(Error::InvalidInput(
-                    "cannot rank an empty candidate set".into(),
-                ));
-            };
-            return Ok((only.id, 0));
+            return Ok((candidates[0].id, 0));
         }
         let rows = absolute_features(&self.model.schema, cluster, candidates);
         let wins = pairwise_wins(&self.model, &rows)?;
@@ -305,6 +300,66 @@ L 0
         let other = square(2, 0.05, 0.05, 722_515);
         let (id, _) = ranker.rank(&cluster, &[unseen, other])?;
         assert_eq!(id, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn train_rejects_empty_examples_and_lonely_true_place() -> Result<()> {
+        let err = crate::test_util::err(GbdtRanker::train(&[], &TrainConfig::default()))?;
+        assert!(matches!(err, Error::InvalidInput(_)));
+        let cluster = cluster_near_origin()?;
+        let only = square(1, 0.0, 0.0, 445_110);
+        let err = crate::test_util::err(GbdtRanker::train(
+            &[LabeledExample {
+                cluster,
+                candidates: vec![only],
+                true_place_id: 1,
+            }],
+            &TrainConfig::default(),
+        ))?;
+        assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn save_load_round_trip_and_negative_pairwise_score() -> Result<()> {
+        let ranker = zero_score_ranker()?;
+        let path = std::env::temp_dir().join(format!(
+            "visit-attribution-ranker-{}-{}.va",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        ranker.save(&path)?;
+        let loaded = GbdtRanker::load(&path)?;
+        let _ = std::fs::remove_file(&path);
+        let (id, wins) = loaded.rank(&cluster_near_origin()?, &[square(9, 0.0, 0.0, 445_110)])?;
+        assert_eq!((id, wins), (9, 0));
+
+        let neg_text = "\
+VA_GBDT 1
+base 0
+lr 1
+dim 28
+naics
+trees 1
+L -1
+";
+        let neg_path = std::env::temp_dir().join(format!(
+            "visit-attribution-neg-{}-{}.va",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::write(&neg_path, neg_text)?;
+        let neg = GbdtRanker::load(&neg_path)?;
+        let _ = std::fs::remove_file(&neg_path);
+        let a = square(1, 0.0, 0.0, 445_110);
+        let b = square(2, 0.0, 0.0, 445_110);
+        let (id, wins) = neg.rank(&cluster_near_origin()?, &[a, b])?;
+        assert_eq!((id, wins), (2, 1));
         Ok(())
     }
 }

@@ -218,3 +218,30 @@ fn variance(values: &[f64]) -> f64 {
     let m = mean(values);
     values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / crate::types::len_f64(values.len())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_stats_and_oob_partition() {
+        assert!((mean(&[])).abs() < f64::EPSILON);
+        assert!((variance(&[])).abs() < f64::EPSILON);
+        let (left, right) = partition_by_threshold(&[vec![]], 3, 0.0);
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+        let (res, sample) = build_residuals(&[vec![1.0]], &[], &[0.0], &[0]);
+        assert!(res.is_empty() && sample.is_empty());
+        let (res, sample) = build_residuals(&[], &[1.0], &[0.0], &[0]);
+        assert!(res.is_empty() && sample.is_empty());
+    }
+
+    #[test]
+    fn identical_features_yield_a_leaf() {
+        let same = vec![1.0, 1.0, 1.0, 1.0];
+        let mixed = vec![1.0, -1.0, 1.0, -1.0];
+        let xs = vec![same.clone(), same.clone(), same.clone(), same];
+        let leaf = build_tree(&xs, &mixed, &TrainConfig::default(), 0);
+        assert!(matches!(leaf, Node::Leaf { .. }));
+    }
+}

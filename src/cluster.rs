@@ -52,9 +52,7 @@ impl LargePoiClusterer {
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
-            let Some(seed) = pings.get(i) else {
-                break;
-            };
+            let seed = pings[i];
             let Some(pid) = smallest_containing_large_place(seed.point, &large) else {
                 i += 1;
                 continue;
@@ -90,9 +88,7 @@ fn smallest_containing_large_place(point: Point, large: &[&Place]) -> Option<u64
 fn extend_large_run(pings: &[GpsPing], large: &[&Place], pid: u64, start: usize) -> usize {
     let mut i = start + 1;
     while i < pings.len() {
-        let Some(cur) = pings.get(i) else {
-            break;
-        };
+        let cur = pings[i];
         let still = large
             .iter()
             .any(|place| place.id == pid && point_in_polygon(cur.point, &place.polygon));
@@ -112,18 +108,14 @@ fn push_large_cluster(
     used: &mut [bool],
     clusters: &mut Vec<Cluster>,
 ) {
-    if end - start < min_cluster_pings {
+    if end - start < min_cluster_pings || end > pings.len() || end > used.len() {
         return;
     }
-    if let Some(flags) = used.get_mut(start..end) {
-        for flag in flags {
-            *flag = true;
-        }
+    for flag in &mut used[start..end] {
+        *flag = true;
     }
-    if let Some(slice) = pings.get(start..end) {
-        if let Ok(cluster) = Cluster::from_pings(slice.to_vec()) {
-            clusters.push(cluster);
-        }
+    if let Ok(cluster) = Cluster::from_pings(pings[start..end].to_vec()) {
+        clusters.push(cluster);
     }
 }
 
@@ -162,16 +154,12 @@ impl Clusterer for TimeAwareDensityClusterer {
         let mut clusters = Vec::new();
         let mut i = 0usize;
         while i < pings.len() {
-            let Some(&seed) = pings.get(i) else {
-                break;
-            };
+            let seed = pings[i];
             let mut members = vec![seed];
             let mut last = seed;
             i += 1;
             while i < pings.len() {
-                let Some(&cur) = pings.get(i) else {
-                    break;
-                };
+                let cur = pings[i];
                 if !try_extend_density_member(
                     last,
                     cur,
@@ -269,8 +257,8 @@ fn extend_density_run(
     end: usize,
     clusters: &mut Vec<Cluster>,
 ) {
-    if let Some(run) = pings.get(start..end) {
-        clusters.extend(density.cluster(run, &[]));
+    if start < end && end <= pings.len() {
+        clusters.extend(density.cluster(&pings[start..end], &[]));
     }
 }
 
@@ -464,5 +452,45 @@ mod tests {
             &[],
         );
         assert!(!jumped.iter().any(|c| c.start_time_s < 10.0 && c.end_time_s > 20.0));
+
+        // ~89 m: above dist_threshold_m (80) but below max_dist_threshold_m (100).
+        let mid = density().cluster(
+            &[
+                ping(0.0, 0.0, 0.0),
+                ping(0.0008, 0.0, 10.0),
+                ping(0.0016, 0.0, 20.0),
+            ],
+            &[],
+        );
+        assert!(mid.iter().all(|c| c.pings.len() < 3));
+    }
+
+    #[test]
+    fn empty_inputs_and_large_poi_trait_cluster() -> Result<()> {
+        assert!(density().cluster(&[], &[]).is_empty());
+        assert!(TwoPassClusterer::new(Config::default()).cluster(&[], &[]).is_empty());
+        let (clusters, used) = LargePoiClusterer::new(large_cfg()?).extract(&[], &[]);
+        assert!(clusters.is_empty());
+        assert!(used.is_empty());
+        let place = square_place(1, 0.001);
+        let pings = [ping(0.0, 0.0, 0.0), ping(0.0001, 0.0, 10.0)];
+        let via_trait = LargePoiClusterer::new(large_cfg()?).cluster(&pings, &[place]);
+        assert_eq!(via_trait.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn short_large_poi_run_is_discarded() -> Result<()> {
+        let place = square_place(1, 0.001);
+        let (clusters, used) =
+            LargePoiClusterer::new(large_cfg()?).extract(&[ping(0.0, 0.0, 0.0)], &[place]);
+        assert!(clusters.is_empty());
+        assert_eq!(used, [false]);
+        let mut out = Vec::new();
+        push_if_dense_enough(&mut out, Vec::new(), 0);
+        assert!(out.is_empty());
+        push_if_dense_enough(&mut out, vec![ping(0.0, 0.0, 0.0)], 2);
+        assert!(out.is_empty());
+        Ok(())
     }
 }
