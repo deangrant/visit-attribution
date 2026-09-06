@@ -132,7 +132,7 @@ impl GbdtModel {
         }
         let mut s = self.base_score;
         for tree in &self.trees {
-            s += self.learning_rate * eval_tree(tree, x)?;
+            s = self.learning_rate.mul_add(eval_tree(tree, x)?, s);
         }
         Ok(s)
     }

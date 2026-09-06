@@ -114,7 +114,7 @@ pub(super) fn apply_tree(
         let Some(pred) = preds.get_mut(i) else {
             continue;
         };
-        *pred += learning_rate * eval_tree(tree, row)?;
+        *pred = learning_rate.mul_add(eval_tree(tree, row)?, *pred);
     }
     Ok(())
 }
