@@ -14,6 +14,7 @@
 //! Train a ranker on labeled clusters, then attribute a trajectory:
 //!
 //! ```
+//! # fn main() -> visit_attribution::Result<()> {
 //! use visit_attribution::{
 //!     Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Point,
 //!     TrainConfig, VisitAttributor,
@@ -47,8 +48,7 @@
 //!     GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
 //!     GpsPing::new(0.0005, 0.0005, 30.0, 5.0),
 //!     GpsPing::new(0.00055, 0.00045, 60.0, 5.0),
-//! ])
-//! .unwrap();
+//! ])?;
 //! let ranker = GbdtRanker::train(
 //!     &[LabeledExample {
 //!         cluster: cluster.clone(),
@@ -56,21 +56,18 @@
 //!         true_place_id: 1,
 //!     }],
 //!     &TrainConfig::default(),
-//! )
-//! .unwrap();
+//! )?;
 //!
 //! let places = vec![near, far];
 //! let attributor = VisitAttributor::builder()
 //!     .config(Config::default())
 //!     .ranker(ranker)
-//!     .build()
-//!     .unwrap();
-//! let visits = attributor
-//!     .attribute(&cluster.pings, &places)
-//!     .unwrap()
-//!     .visits;
+//!     .build()?;
+//! let visits = attributor.attribute(&cluster.pings, &places)?.visits;
 //! assert!(!visits.is_empty());
 //! assert_eq!(visits[0].place_id, 1);
+//! # Ok(())
+//! # }
 //! ```
 
 mod clean;
@@ -84,6 +81,8 @@ mod join;
 mod pipeline;
 mod rank;
 mod spatial;
+#[cfg(test)]
+mod test_util;
 mod types;
 
 // Domain

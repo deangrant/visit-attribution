@@ -2,11 +2,13 @@
 //!
 //! Demonstrates reusing a `.va` model file across processes/runs.
 
+use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
+    VisitAttributor,
 };
 
-fn main() {
+fn main() -> Result<()> {
     let near = Place::square(1, 0.0, 0.0, 0.001, Some(445_110));
     let far = Place::square(2, 0.05, 0.05, 0.001, Some(445_110));
     let pings = vec![
@@ -14,7 +16,7 @@ fn main() {
         GpsPing::new(0.0005, 0.0005, 30.0, 5.0),
         GpsPing::new(0.00055, 0.00045, 60.0, 5.0),
     ];
-    let cluster = Cluster::from_pings(pings.clone()).expect("cluster");
+    let cluster = Cluster::from_pings(pings.clone())?;
 
     let trained = GbdtRanker::train(
         &[LabeledExample {
@@ -27,38 +29,38 @@ fn main() {
             max_depth: 3,
             ..TrainConfig::default()
         },
-    )
-    .expect("train");
+    )?;
 
     let path = std::env::temp_dir().join("visit-attribution-persist.va");
-    trained.save(&path).expect("save");
-    println!("saved model to {}", path.display());
+    trained.save(&path)?;
+    writeln!(io::stdout(), "saved model to {}", path.display())?;
 
-    let loaded = GbdtRanker::load(&path).expect("load");
+    let loaded = GbdtRanker::load(&path)?;
     let _ = std::fs::remove_file(&path);
 
     let places = vec![near, far];
     let visits = VisitAttributor::builder()
-        .config(Config::builder().join_radius_m(80.0).build().expect("config"))
+        .config(Config::builder().join_radius_m(80.0).build()?)
         .ranker(loaded)
-        .build()
-        .expect("build")
-        .attribute(&pings, &places)
-        .expect("attribute")
+        .build()?
+        .attribute(&pings, &places)?
         .visits;
 
+    let mut out = io::stdout();
     for visit in &visits {
-        println!(
+        writeln!(
+            out,
             "visit place_id={} wins={} duration_s={:.0} candidates={:?}",
             visit.place_id,
             visit.wins,
             visit.cluster.duration_s(),
             visit.candidates
-        );
+        )?;
     }
     assert!(
         !visits.is_empty(),
         "loaded ranker should attribute the stay"
     );
     assert_eq!(visits[0].place_id, 1);
+    Ok(())
 }

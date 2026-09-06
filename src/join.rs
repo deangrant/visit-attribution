@@ -135,7 +135,7 @@ impl QuadtreePlaceIndex {
 }
 
 /// Factory for the default bbox-quadtree place index.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct QuadtreePlaceIndexFactory {
     config: Config,
 }
@@ -143,7 +143,7 @@ pub struct QuadtreePlaceIndexFactory {
 impl QuadtreePlaceIndexFactory {
     /// Create a factory from pipeline configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 }
@@ -180,6 +180,7 @@ fn cluster_probe_ring(cluster: &Cluster, radius_m: f64) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::types::{GpsPing, PlaceId};
 
     fn square(id: PlaceId, lat0: f64, lon0: f64) -> Place {
@@ -204,12 +205,11 @@ mod tests {
         )
     }
 
-    fn two_ping_cluster(lat: f64, lon: f64, ha: f64) -> Cluster {
+    fn two_ping_cluster(lat: f64, lon: f64, ha: f64) -> Result<Cluster> {
         Cluster::from_pings(vec![
             GpsPing::new(lat, lon, 0.0, ha),
             GpsPing::new(lat + 0.00005, lon, 10.0, ha),
         ])
-        .unwrap()
     }
 
     fn candidates_for(cfg: Config, places: &[Place], cluster: &Cluster) -> Vec<Place> {
@@ -225,79 +225,84 @@ mod tests {
         assert_eq!(cands.first().map(|p| p.id), Some(id));
     }
 
-    fn join_cfg(radius_m: f64) -> Config {
-        Config::builder().join_radius_m(radius_m).build().unwrap()
+    fn join_cfg(radius_m: f64) -> Result<Config> {
+        Config::builder().join_radius_m(radius_m).build()
     }
 
     #[test]
-    fn finds_nearby_place() {
+    fn finds_nearby_place() -> Result<()> {
         let place = square(7, 0.0, 0.0);
-        let cluster = two_ping_cluster(0.0005, 0.0005, 10.0);
+        let cluster = two_ping_cluster(0.0005, 0.0005, 10.0)?;
         assert_one_candidate(&candidates_for(Config::default(), &[place], &cluster), 7);
+        Ok(())
     }
 
     #[test]
-    fn empty_catalog_yields_no_candidates() {
-        assert_no_candidates(Config::default(), &[], &two_ping_cluster(0.0, 0.0, 5.0));
+    fn empty_catalog_yields_no_candidates() -> Result<()> {
+        assert_no_candidates(Config::default(), &[], &two_ping_cluster(0.0, 0.0, 5.0)?);
+        Ok(())
     }
 
     #[test]
-    fn radius_and_geometry_negative_cases() {
+    fn radius_and_geometry_negative_cases() -> Result<()> {
         assert_no_candidates(
-            join_cfg(10.0),
+            join_cfg(10.0)?,
             &[l_shape(1)],
-            &two_ping_cluster(0.0015, 0.0015, 5.0),
+            &two_ping_cluster(0.0015, 0.0015, 5.0)?,
         );
         assert_no_candidates(
-            join_cfg(20.0),
+            join_cfg(20.0)?,
             &[square(1, 0.0, 0.0)],
-            &two_ping_cluster(0.0005, 0.002, 5.0),
+            &two_ping_cluster(0.0005, 0.002, 5.0)?,
         );
         let empty = Place::new(1, vec![], Point::new(0.0005, 0.0005), None);
         assert_no_candidates(
-            join_cfg(50.0),
+            join_cfg(50.0)?,
             &[empty],
-            &two_ping_cluster(0.0005, 0.0005, 5.0),
+            &two_ping_cluster(0.0005, 0.0005, 5.0)?,
         );
+        Ok(())
     }
 
     #[test]
-    fn radius_and_accuracy_positive_cases() {
+    fn radius_and_accuracy_positive_cases() -> Result<()> {
         assert_one_candidate(
             &candidates_for(
-                join_cfg(50.0),
+                join_cfg(50.0)?,
                 &[l_shape(1)],
-                &two_ping_cluster(0.00205, 0.0005, 5.0),
+                &two_ping_cluster(0.00205, 0.0005, 5.0)?,
             ),
             1,
         );
         assert_one_candidate(
             &candidates_for(
-                join_cfg(20.0),
+                join_cfg(20.0)?,
                 &[square(1, 0.0, 0.0)],
-                &two_ping_cluster(0.0005, 0.002, 200.0),
+                &two_ping_cluster(0.0005, 0.002, 200.0)?,
             ),
             1,
         );
+        Ok(())
     }
 
     #[test]
-    fn finds_nearby_among_many_far_places() {
+    fn finds_nearby_among_many_far_places() -> Result<()> {
         let mut places = vec![square(1, 0.0, 0.0)];
         for i in 0u32..200 {
-            let offset = 1.0 + f64::from(i) * 0.01;
+            let offset = f64::from(i).mul_add(0.01, 1.0);
             places.push(square(u64::from(i) + 2, offset, offset));
         }
         let cands = candidates_for(
             Config::default(),
             &places,
-            &two_ping_cluster(0.0005, 0.0005, 10.0),
+            &two_ping_cluster(0.0005, 0.0005, 10.0)?,
         );
         assert_one_candidate(&cands, 1);
+        Ok(())
     }
 
     #[test]
-    fn dense_local_catalog_still_returns_only_nearby_match() {
+    fn dense_local_catalog_still_returns_only_nearby_match() -> Result<()> {
         let mut places = vec![square(1, 0.0, 0.0)];
         for i in 0u32..64 {
             let row = f64::from(i / 8);
@@ -309,25 +314,27 @@ mod tests {
             ));
         }
         let cands = candidates_for(
-            join_cfg(30.0),
+            join_cfg(30.0)?,
             &places,
-            &two_ping_cluster(0.0005, 0.0005, 5.0),
+            &two_ping_cluster(0.0005, 0.0005, 5.0)?,
         );
         assert_one_candidate(&cands, 1);
+        Ok(())
     }
 
     #[test]
-    fn overlapping_places_both_returned() {
+    fn overlapping_places_both_returned() -> Result<()> {
         let a = square(1, 0.0, 0.0);
         let b = square(2, 0.0002, 0.0002);
         let mut cands = candidates_for(
-            join_cfg(50.0),
+            join_cfg(50.0)?,
             &[a, b],
-            &two_ping_cluster(0.0005, 0.0005, 5.0),
+            &two_ping_cluster(0.0005, 0.0005, 5.0)?,
         );
         cands.sort_by_key(|p| p.id);
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0].id, 1);
         assert_eq!(cands[1].id, 2);
+        Ok(())
     }
 }

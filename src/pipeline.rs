@@ -76,7 +76,7 @@ where
 
     /// Borrow the pipeline configuration.
     #[must_use]
-    pub fn config(&self) -> &Config {
+    pub const fn config(&self) -> &Config {
         &self.config
     }
 }
@@ -101,29 +101,28 @@ impl VisitAttributorBuilder {
         config.validate()?;
         let ranker = self.ranker.ok_or_else(|| Error::InvalidInput("ranker is required".into()))?;
         Ok(VisitAttributor {
-            cleaner: DefaultPingCleaner::new(config.clone()),
-            clusterer: TwoPassClusterer::new(config.clone()),
-            index_factory: QuadtreePlaceIndexFactory::new(config.clone()),
+            cleaner: DefaultPingCleaner::new(config),
+            clusterer: TwoPassClusterer::new(config),
+            index_factory: QuadtreePlaceIndexFactory::new(config),
             ranker,
             config,
         })
     }
 }
 
-macro_rules! builder_opt {
-    ($name:ident, $ty:ty, $doc:expr) => {
-        impl VisitAttributorBuilder {
-            #[doc = $doc]
-            pub fn $name(mut self, $name: $ty) -> Self {
-                self.$name = Some($name);
-                self
-            }
-        }
-    };
-}
+impl VisitAttributorBuilder {
+    /// Set validated pipeline configuration.
+    pub const fn config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
+    }
 
-builder_opt!(config, Config, "Set validated pipeline configuration.");
-builder_opt!(ranker, GbdtRanker, "Set the trained or loaded ranker.");
+    /// Set the trained or loaded ranker.
+    pub fn ranker(mut self, ranker: GbdtRanker) -> Self {
+        self.ranker = Some(ranker);
+        self
+    }
+}
 
 /// Construct an attributor with explicit stage implementations.
 ///
@@ -150,6 +149,7 @@ pub fn with_parts<Cl, C, F, R>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::types::PlaceId;
 
     struct IdentityCleaner;
@@ -190,32 +190,33 @@ mod tests {
 
     impl Ranker for PanicRanker {
         fn rank(&self, _cluster: &Cluster, _candidates: &[Place]) -> Result<(PlaceId, u32)> {
-            panic!("rank should not run for unmatched clusters");
+            Err(Error::InvalidInput(
+                "rank should not run for unmatched clusters".into(),
+            ))
         }
     }
 
     #[test]
-    fn surfaces_clusters_with_no_candidates() {
+    fn surfaces_clusters_with_no_candidates() -> Result<()> {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
             GpsPing::new(0.0001, 0.0, 10.0, 10.0),
-        ])
-        .unwrap();
+        ])?;
         let attributor = with_parts(
             Config::default(),
             IdentityCleaner,
             FixedClusterer(cluster.clone()),
             EmptyIndexFactory,
             PanicRanker,
-        )
-        .unwrap();
-        let result = attributor.attribute(&cluster.pings, &[]).unwrap();
+        )?;
+        let result = attributor.attribute(&cluster.pings, &[])?;
         assert!(result.visits.is_empty());
         assert_eq!(result.unmatched_clusters, vec![cluster]);
+        Ok(())
     }
 
     #[test]
-    fn with_parts_rejects_invalid_config() {
+    fn with_parts_rejects_invalid_config() -> Result<()> {
         let config = Config {
             max_time_gap_s: 0.0,
             ..Config::default()
@@ -223,16 +224,14 @@ mod tests {
         let result = with_parts(
             config,
             IdentityCleaner,
-            FixedClusterer(
-                Cluster::from_pings(vec![
-                    GpsPing::new(0.0, 0.0, 0.0, 10.0),
-                    GpsPing::new(0.0, 0.0, 1.0, 10.0),
-                ])
-                .unwrap(),
-            ),
+            FixedClusterer(Cluster::from_pings(vec![
+                GpsPing::new(0.0, 0.0, 0.0, 10.0),
+                GpsPing::new(0.0, 0.0, 1.0, 10.0),
+            ])?),
             EmptyIndexFactory,
             PanicRanker,
         );
         assert!(matches!(result, Err(Error::InvalidInput(_))));
+        Ok(())
     }
 }

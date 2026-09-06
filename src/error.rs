@@ -18,9 +18,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
-            Error::Model(msg) => write!(f, "model error: {msg}"),
-            Error::Io(err) => write!(f, "I/O error: {err}"),
+            Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
+            Self::Model(msg) => write!(f, "model error: {msg}"),
+            Self::Io(err) => write!(f, "I/O error: {err}"),
         }
     }
 }
@@ -28,15 +28,15 @@ impl fmt::Display for Error {
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Error::Io(err) => Some(err),
-            Error::InvalidInput(_) | Error::Model(_) => None,
+            Self::Io(err) => Some(err),
+            Self::InvalidInput(_) | Self::Model(_) => None,
         }
     }
 }
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Error::Io(value)
+        Self::Io(value)
     }
 }
 
@@ -49,13 +49,14 @@ mod tests {
     use std::io::ErrorKind;
 
     #[test]
-    fn io_variant_preserves_error_kind() {
+    fn io_variant_preserves_error_kind() -> Result<()> {
         let err: Error = io::Error::new(ErrorKind::NotFound, "missing model").into();
-        match &err {
-            Error::Io(inner) => assert_eq!(inner.kind(), ErrorKind::NotFound),
-            other => panic!("expected Io, got {other:?}"),
-        }
+        let Error::Io(inner) = &err else {
+            return Err(Error::InvalidInput("expected Io".into()));
+        };
+        assert_eq!(inner.kind(), ErrorKind::NotFound);
         assert!(err.source().is_some());
         assert!(err.to_string().contains("missing model"));
+        Ok(())
     }
 }

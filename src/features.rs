@@ -131,7 +131,7 @@ fn ranks(values: &[f64]) -> Vec<f64> {
     while i < pairs.len() {
         let j = tie_end(&pairs, i);
         assign_rank(&mut out, &pairs, i, j, rank);
-        rank += (j - i) as f64;
+        rank += crate::types::len_f64(j - i);
         i = j;
     }
     out
@@ -170,10 +170,10 @@ pub struct PreferencePair {
     /// `1` if A is the true place, `-1` if B is the true place.
     pub label: f64,
     /// Left-hand place id (A).
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg(test)]
     pub left_id: PlaceId,
     /// Right-hand place id (B).
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg(test)]
     pub right_id: PlaceId,
 }
 
@@ -202,7 +202,9 @@ pub fn preference_pairs(
             pairs.push(PreferencePair {
                 diff,
                 label,
+                #[cfg(test)]
                 left_id: left.0,
+                #[cfg(test)]
                 right_id: right.0,
             });
         }
@@ -213,6 +215,7 @@ pub fn preference_pairs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::types::{GpsPing, Point};
 
     fn bare_place(id: PlaceId, naics: Option<u32>) -> Place {
@@ -230,13 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn preference_labels_only_involve_true_place() {
+    fn preference_labels_only_involve_true_place() -> Result<()> {
         let schema = FeatureSchema::new(vec![4451]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ])
-        .unwrap();
+        ])?;
         let a = bare_place(1, Some(445_110));
         let b = Place::new(
             2,
@@ -256,16 +258,16 @@ mod tests {
             (p.label - 1.0).abs() < f64::EPSILON || (p.label + 1.0).abs() < f64::EPSILON
         }));
         assert!(pairs.iter().all(|p| p.left_id == 1 || p.right_id == 1));
+        Ok(())
     }
 
     #[test]
-    fn preference_pairs_emit_one_unordered_pair_per_distractor() {
+    fn preference_pairs_emit_one_unordered_pair_per_distractor() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ])
-        .unwrap();
+        ])?;
         let true_place = bare_place(1, None);
         let a = Place::new(
             2,
@@ -308,6 +310,7 @@ mod tests {
             .collect();
         distractors.sort_unstable();
         assert_eq!(distractors, vec![2, 3]);
+        Ok(())
     }
 
     #[test]
@@ -318,13 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn unseen_or_missing_naics_activates_unk_hour() {
+    fn unseen_or_missing_naics_activates_unk_hour() -> Result<()> {
         let schema = FeatureSchema::new(vec![4451]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 3_600.0, 5.0), // hour 1 if Unix-like epoch day
             GpsPing::new(0.0, 0.0, 3_610.0, 5.0),
-        ])
-        .unwrap();
+        ])?;
         let hour = usize::from(cluster.hour_of_day());
         let unseen = bare_place(1, Some(722_515));
         let missing = bare_place(2, None);
@@ -336,6 +338,7 @@ mod tests {
         assert!((rows[1].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
         assert!((rows[2].1[unk_base + hour]).abs() < f64::EPSILON);
         assert!((rows[2].1[4 + hour] - 1.0).abs() < f64::EPSILON);
+        Ok(())
     }
 
     #[test]
@@ -347,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn from_places_keeps_top_k_by_frequency() {
+    fn from_places_keeps_top_k_by_frequency() -> Result<()> {
         let places = vec![
             bare_place(1, Some(445_110)),
             bare_place(2, Some(445_110)),
@@ -360,12 +363,12 @@ mod tests {
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
-        ])
-        .unwrap();
+        ])?;
         let hour = usize::from(cluster.hour_of_day());
         let rare = bare_place(9, Some(722_515));
         let row = &absolute_features(&schema, &cluster, &[rare])[0].1;
         let unk_base = 4 + 24;
         assert!((row[unk_base + hour] - 1.0).abs() < f64::EPSILON);
+        Ok(())
     }
 }

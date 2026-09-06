@@ -31,7 +31,7 @@ pub struct LargePoiClusterer {
 impl LargePoiClusterer {
     /// Create a large-POI clusterer from configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 
@@ -145,7 +145,7 @@ pub struct TimeAwareDensityClusterer {
 impl TimeAwareDensityClusterer {
     /// Create a density clusterer from configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 }
@@ -241,9 +241,9 @@ pub struct TwoPassClusterer {
 impl TwoPassClusterer {
     /// Create a two-pass clusterer from configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self {
-            large: LargePoiClusterer::new(config.clone()),
+            large: LargePoiClusterer::new(config),
             density: TimeAwareDensityClusterer::new(config),
         }
     }
@@ -298,6 +298,7 @@ fn density_cluster_unused_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::types::{PlaceId, Point};
 
     fn ping(lat: f64, lon: f64, t: f64) -> GpsPing {
@@ -324,8 +325,17 @@ mod tests {
         TimeAwareDensityClusterer::new(Config::default())
     }
 
-    fn large_cfg() -> Config {
-        Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build().unwrap()
+    fn large_cfg() -> Result<Config> {
+        Config::builder().large_poi_area_m2(100.0).min_cluster_pings(2).build()
+    }
+
+    fn assert_split_clusters(clusters: &[Cluster], used: &[bool]) {
+        assert_eq!(used, [true, true, true, true]);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].pings.len(), 2);
+        assert_eq!(clusters[1].pings.len(), 2);
+        assert!((clusters[0].end_time_s - 10.0).abs() < f64::EPSILON);
+        assert!((clusters[1].start_time_s - 20.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -344,20 +354,21 @@ mod tests {
     }
 
     #[test]
-    fn large_poi_pass_consumes_interior_pings() {
+    fn large_poi_pass_consumes_interior_pings() -> Result<()> {
         let place = square_place(1, 0.001);
         let pings = vec![
             ping(0.0, 0.0, 0.0),
             ping(0.0001, 0.0, 10.0),
             ping(0.0, 0.0001, 20.0),
         ];
-        let clusters = TwoPassClusterer::new(large_cfg()).cluster(&pings, &[place]);
+        let clusters = TwoPassClusterer::new(large_cfg()?).cluster(&pings, &[place]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 3);
+        Ok(())
     }
 
     #[test]
-    fn large_poi_overlap_prefers_smallest_area_not_catalog_order() {
+    fn large_poi_overlap_prefers_smallest_area_not_catalog_order() -> Result<()> {
         let mall = square_place(2, 0.002);
         let plaza = square_place(1, 0.0005);
         let pings = vec![
@@ -366,34 +377,30 @@ mod tests {
             ping(0.001, 0.0, 20.0),
             ping(0.0011, 0.0, 30.0),
         ];
-        let clusterer = LargePoiClusterer::new(large_cfg());
+        let clusterer = LargePoiClusterer::new(large_cfg()?);
         let (clusters, used) = clusterer.extract(&pings, &[mall.clone(), plaza.clone()]);
-        assert_eq!(used, vec![true, true, true, true]);
-        assert_eq!(clusters.len(), 2);
-        assert_eq!(clusters[0].pings.len(), 2);
-        assert_eq!(clusters[1].pings.len(), 2);
-        assert!((clusters[0].end_time_s - 10.0).abs() < f64::EPSILON);
-        assert!((clusters[1].start_time_s - 20.0).abs() < f64::EPSILON);
-
+        assert_split_clusters(&clusters, &used);
         let (rev_clusters, rev_used) = clusterer.extract(&pings, &[plaza, mall]);
         assert_eq!(rev_used, used);
         assert_eq!(rev_clusters.len(), clusters.len());
         assert_eq!(rev_clusters[0].pings.len(), clusters[0].pings.len());
         assert_eq!(rev_clusters[1].pings.len(), clusters[1].pings.len());
+        Ok(())
     }
 
     #[test]
-    fn large_poi_without_overlap_still_uses_containing_place() {
+    fn large_poi_without_overlap_still_uses_containing_place() -> Result<()> {
         let mall = square_place(1, 0.002);
         let pings = vec![ping(0.001, 0.0, 0.0), ping(0.0011, 0.0, 10.0)];
-        let (clusters, used) = LargePoiClusterer::new(large_cfg()).extract(&pings, &[mall]);
+        let (clusters, used) = LargePoiClusterer::new(large_cfg()?).extract(&pings, &[mall]);
         assert_eq!(used, vec![true, true]);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].pings.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn density_pass_does_not_merge_across_large_poi_gap() {
+    fn density_pass_does_not_merge_across_large_poi_gap() -> Result<()> {
         let mall = square_place(1, 0.001);
         let mall_start = 1_000.0;
         let mall_end = 1_010.0;
@@ -405,9 +412,10 @@ mod tests {
             ping(0.002, 0.0, 2_000.0),
             ping(0.0021, 0.0, 2_010.0),
         ];
-        let clusters = TwoPassClusterer::new(large_cfg()).cluster(&pings, &[mall]);
+        let clusters = TwoPassClusterer::new(large_cfg()?).cluster(&pings, &[mall]);
         assert_eq!(clusters.len(), 3);
         assert!(!clusters.iter().any(|c| c.start_time_s < mall_start && c.end_time_s > mall_end));
+        Ok(())
     }
 
     #[test]

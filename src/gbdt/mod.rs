@@ -19,7 +19,7 @@ const MAX_NODES_PER_TREE: usize = 8192;
 const MAX_MODEL_BYTES: usize = 8 * 1024 * 1024;
 
 /// Hyperparameters for GBDT training.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrainConfig {
     /// Number of boosting rounds.
     pub n_trees: usize,
@@ -51,16 +51,24 @@ impl Default for TrainConfig {
     }
 }
 
+/// One node in a trained preference tree.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Node {
+pub enum Node {
+    /// Terminal score.
     Leaf {
+        /// Predicted residual.
         value: f64,
     },
+    /// Split on a feature threshold.
     Branch {
+        /// Feature index in the difference vector.
         feature: usize,
+        /// Values `<= threshold` take the left child.
         threshold: f64,
-        left: Box<Node>,
-        right: Box<Node>,
+        /// Left subtree.
+        left: Box<Self>,
+        /// Right subtree.
+        right: Box<Self>,
     },
 }
 
@@ -158,7 +166,8 @@ impl GbdtModel {
     }
 }
 
-pub(super) fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
+/// Walk `node` to a leaf for feature vector `x`.
+pub fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
     match node {
         Node::Leaf { value } => Ok(*value),
         Node::Branch {
@@ -185,6 +194,7 @@ pub(super) fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
 
     fn row4(first: f64) -> Vec<f64> {
         let mut v = vec![0.0; 28]; // empty-naics schema dim = 4 + 24 UNK
@@ -200,59 +210,65 @@ mod tests {
     }
 
     #[test]
-    fn learns_simple_preference_direction() {
+    fn learns_simple_preference_direction() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         // Difference feature: positive when left is better on first dim.
         let xs = vec![row4(2.0), row4(1.0), row4(-2.0), row4(-1.0)];
         let ys = vec![1.0, 1.0, -1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        assert!(model.predict_raw(xs.first().unwrap()).unwrap() > 0.0);
-        assert!(model.predict_raw(xs.get(2).unwrap()).unwrap() < 0.0);
+        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default())?;
+        assert!(model.predict_raw(crate::test_util::some(xs.first())?)? > 0.0);
+        assert!(model.predict_raw(crate::test_util::some(xs.get(2))?)? < 0.0);
         let text = model.to_string_format();
-        let loaded = GbdtModel::from_string_format(&text).unwrap();
+        let loaded = GbdtModel::from_string_format(&text)?;
         assert!(
-            (loaded.predict_raw(xs.first().unwrap()).unwrap()
-                - model.predict_raw(xs.first().unwrap()).unwrap())
+            (loaded.predict_raw(crate::test_util::some(xs.first())?)?
+                - model.predict_raw(crate::test_util::some(xs.first())?)?)
             .abs()
                 < 1e-9
         );
+        Ok(())
     }
 
-    fn assert_model_err(text: &str) {
-        let err = GbdtModel::from_string_format(text).unwrap_err();
+    fn assert_model_err(text: &str) -> Result<()> {
+        let err = crate::test_util::err(GbdtModel::from_string_format(text))?;
         assert!(matches!(err, Error::Model(_)));
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_dim_mismatch_with_schema() {
+    fn load_rejects_dim_mismatch_with_schema() -> Result<()> {
         // Empty naics ⇒ schema.dim() == 4 + 24 (UNK); claim dim 99.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 99, 1, "L 0"));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 99, 1, "L 0"))?;
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_out_of_range_feature_index() {
+    fn load_rejects_out_of_range_feature_index() -> Result<()> {
         // Empty naics ⇒ dim 28; branch splits on feature 40.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 40 0 L 1 L -1"));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 40 0 L 1 L -1"))?;
+        Ok(())
     }
 
     #[test]
-    fn predict_raw_rejects_wrong_width() {
+    fn predict_raw_rejects_wrong_width() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         let xs = vec![row4(1.0), row4(-1.0)];
         let ys = vec![1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        let err = model.predict_raw(&[1.0, 0.0]).unwrap_err();
+        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default())?;
+        let err = crate::test_util::err(model.predict_raw(&[1.0, 0.0]))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_too_many_trees() {
+    fn load_rejects_too_many_trees() -> Result<()> {
         // MAX_TREES is 256.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 257, "L 0"));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 257, "L 0"))?;
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_excessive_tree_depth() {
+    fn load_rejects_excessive_tree_depth() -> Result<()> {
         let mut tree = String::new();
         for _ in 0..=MAX_TREE_DEPTH {
             tree.push_str("B 0 0 ");
@@ -261,18 +277,20 @@ mod tests {
         for _ in 0..=MAX_TREE_DEPTH {
             tree.push_str(" L 0");
         }
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, &tree));
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, &tree))?;
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_oversized_model_text() {
+    fn load_rejects_oversized_model_text() -> Result<()> {
         let mut text = leaf_model_text("VA_GBDT 1", 28, 1, "L 0");
         text.push_str(&"x".repeat(MAX_MODEL_BYTES));
-        assert_model_err(&text);
+        assert_model_err(&text)?;
+        Ok(())
     }
 
     #[test]
-    fn train_rejects_excessive_n_trees() {
+    fn train_rejects_excessive_n_trees() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         let xs = vec![row4(1.0), row4(-1.0)];
         let ys = vec![1.0, -1.0];
@@ -280,34 +298,44 @@ mod tests {
             n_trees: MAX_TREES + 1,
             ..TrainConfig::default()
         };
-        let err = GbdtModel::train(schema, &xs, &ys, &config).unwrap_err();
+        let err = crate::test_util::err(GbdtModel::train(schema, &xs, &ys, &config))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn train_rejects_empty_or_mismatched_inputs() {
+    fn train_rejects_empty_or_mismatched_inputs() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
-        let err = GbdtModel::train(schema.clone(), &[], &[], &TrainConfig::default()).unwrap_err();
+        let err = crate::test_util::err(GbdtModel::train(
+            schema.clone(),
+            &[],
+            &[],
+            &TrainConfig::default(),
+        ))?;
         assert!(matches!(err, Error::InvalidInput(_)));
-        let err = GbdtModel::train(
+        let err = crate::test_util::err(GbdtModel::train(
             schema.clone(),
             &[row4(1.0)],
             &[1.0, -1.0],
             &TrainConfig::default(),
-        )
-        .unwrap_err();
+        ))?;
         assert!(matches!(err, Error::InvalidInput(_)));
-        let err =
-            GbdtModel::train(schema, &[vec![1.0]], &[1.0], &TrainConfig::default()).unwrap_err();
+        let err = crate::test_util::err(GbdtModel::train(
+            schema,
+            &[vec![1.0]],
+            &[1.0],
+            &TrainConfig::default(),
+        ))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn train_rejects_zero_hyperparameters_and_deep_trees() {
+    fn train_rejects_zero_hyperparameters_and_deep_trees() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         let xs = vec![row4(1.0), row4(-1.0)];
         let ys = vec![1.0, -1.0];
-        let err = GbdtModel::train(
+        let err = crate::test_util::err(GbdtModel::train(
             schema.clone(),
             &xs,
             &ys,
@@ -315,10 +343,9 @@ mod tests {
                 n_trees: 0,
                 ..TrainConfig::default()
             },
-        )
-        .unwrap_err();
+        ))?;
         assert!(matches!(err, Error::InvalidInput(_)));
-        let err = GbdtModel::train(
+        let err = crate::test_util::err(GbdtModel::train(
             schema,
             &xs,
             &ys,
@@ -326,38 +353,41 @@ mod tests {
                 max_depth: MAX_TREE_DEPTH + 1,
                 ..TrainConfig::default()
             },
-        )
-        .unwrap_err();
+        ))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_wrong_header() {
-        assert_model_err(&leaf_model_text("VA_GBDT 2", 28, 1, "L 0"));
+    fn load_rejects_wrong_header() -> Result<()> {
+        assert_model_err(&leaf_model_text("VA_GBDT 2", 28, 1, "L 0"))?;
+        Ok(())
     }
 
     #[test]
-    fn load_parses_naics_and_rejects_bad_meta() {
+    fn load_parses_naics_and_rejects_bad_meta() -> Result<()> {
         let ok = "VA_GBDT 1\nbase 0\nlr 0.1\ndim 52\nnaics 4451\ntrees 1\nL 0\n";
-        GbdtModel::from_string_format(ok).unwrap();
-        assert_model_err("VA_GBDT 1\nbase 0\nlr 0.1\ndim 28\nfoo\ntrees 1\nL 0\n");
-        assert_model_err("VA_GBDT 1\nbase 0\nlr 0.1\ndim 28\nnaics xyz\ntrees 1\nL 0\n");
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "X 0"));
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "L"));
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 0"));
+        GbdtModel::from_string_format(ok)?;
+        assert_model_err("VA_GBDT 1\nbase 0\nlr 0.1\ndim 28\nfoo\ntrees 1\nL 0\n")?;
+        assert_model_err("VA_GBDT 1\nbase 0\nlr 0.1\ndim 28\nnaics xyz\ntrees 1\nL 0\n")?;
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "X 0"))?;
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "L"))?;
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 0"))?;
+        Ok(())
     }
 
     #[test]
-    fn load_rejects_truncated_tree_lines() {
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 2, "L 0"));
+    fn load_rejects_truncated_tree_lines() -> Result<()> {
+        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 2, "L 0"))?;
+        Ok(())
     }
 
     #[test]
-    fn save_load_filesystem_round_trip() {
+    fn save_load_filesystem_round_trip() -> Result<()> {
         let schema = FeatureSchema::new(vec![]);
         let xs = vec![row4(2.0), row4(-2.0)];
         let ys = vec![1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
+        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default())?;
         let path = std::env::temp_dir().join(format!(
             "visit-attribution-model-{}-{}.va",
             std::process::id(),
@@ -365,14 +395,15 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        model.save(&path).unwrap();
-        let loaded = GbdtModel::load(&path).unwrap();
+        model.save(&path)?;
+        let loaded = GbdtModel::load(&path)?;
         let _ = std::fs::remove_file(&path);
         assert!(
-            (loaded.predict_raw(xs.first().unwrap()).unwrap()
-                - model.predict_raw(xs.first().unwrap()).unwrap())
+            (loaded.predict_raw(crate::test_util::some(xs.first())?)?
+                - model.predict_raw(crate::test_util::some(xs.first())?)?)
             .abs()
                 < 1e-9
         );
+        Ok(())
     }
 }

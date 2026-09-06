@@ -1,43 +1,107 @@
-name: Lint
+name: lint
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  lint:
-    name: fmt / clippy (stable)
+  fmt:
+    name: rustfmt check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Generate Cargo.lock if missing
-        run: |
-          if [ ! -f Cargo.lock ]; then
-            cargo generate-lockfile
-          fi
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy with warnings denied
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          extra=()
+          if [ -f Cargo.lock ]; then
+            extra+=(--locked)
+          fi
+          cargo clippy --all-targets --all-features "${extra[@]}" -- -D warnings
+
+  docs:
+    name: rustdoc with warnings denied
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          extra=()
+          if [ -f Cargo.lock ]; then
+            extra+=(--locked)
+          fi
+          cargo doc --all-features --no-deps "${extra[@]}"
+
+  conventions:
+    name: 500-line Rust file cap
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Check the 500-line file cap
+        run: |
+          if ! find . -name '*.rs' ! -path '*/target/*' ! -path '*/.git/*' \
+            | grep -q .; then
+            echo "No Rust files; skipping 500-line cap."
+            exit 0
+          fi
+          over=$(find . -name '*.rs' ! -path '*/target/*' ! -path '*/.git/*' \
+            -print0 | xargs -0 wc -l \
+            | awk '$NF != "total" && $1 > 500 { print $1 " " $2 }')
+          if [ -n "${over}" ]; then
+            echo "These files exceed the 500-line cap:"
+            echo "${over}"
+            exit 1
+          fi

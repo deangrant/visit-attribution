@@ -3,11 +3,13 @@
 //! Trajectory: dwell at a cafe → driving hop → bad-accuracy spike → dwell at a
 //! shop → orphan dwell far from the catalog.
 
+use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
+    VisitAttributor,
 };
 
-fn main() {
+fn main() -> Result<()> {
     // Catalog: two places far enough apart that each dwell joins only one.
     let cafe = Place::square(1, 0.0, 0.0, 0.001, Some(722_515));
     let shop = Place::square(2, 0.05, 0.05, 0.001, Some(445_110));
@@ -39,14 +41,12 @@ fn main() {
         GpsPing::new(0.0004, 0.0004, 0.0, 8.0),
         GpsPing::new(0.0005, 0.00045, 20.0, 8.0),
         GpsPing::new(0.00045, 0.0005, 40.0, 8.0),
-    ])
-    .expect("cafe cluster");
+    ])?;
     let shop_cluster = Cluster::from_pings(vec![
         GpsPing::new(0.0504, 0.0504, 2_000.0, 8.0),
         GpsPing::new(0.0505, 0.05045, 2_020.0, 8.0),
         GpsPing::new(0.05045, 0.0505, 2_040.0, 8.0),
-    ])
-    .expect("shop cluster");
+    ])?;
 
     let ranker = GbdtRanker::train(
         &[
@@ -66,41 +66,41 @@ fn main() {
             max_depth: 3,
             ..TrainConfig::default()
         },
-    )
-    .expect("train");
+    )?;
 
-    let config = Config::builder()
-        .join_radius_m(80.0)
-        .min_cluster_pings(2)
-        .build()
-        .expect("config");
+    let config = Config::builder().join_radius_m(80.0).min_cluster_pings(2).build()?;
     let places = vec![cafe, shop];
     let result = VisitAttributor::builder()
         .config(config)
         .ranker(ranker)
-        .build()
-        .expect("build")
-        .attribute(&pings, &places)
-        .expect("attribute");
+        .build()?
+        .attribute(&pings, &places)?;
 
-    println!("visits={}", result.visits.len());
+    let mut out = io::stdout();
+    writeln!(out, "visits={}", result.visits.len())?;
     for visit in &result.visits {
-        println!(
+        writeln!(
+            out,
             "  place_id={} wins={} duration_s={:.0} candidates={:?}",
             visit.place_id,
             visit.wins,
             visit.cluster.duration_s(),
             visit.candidates
-        );
+        )?;
     }
-    println!("unmatched_clusters={}", result.unmatched_clusters.len());
+    writeln!(
+        out,
+        "unmatched_clusters={}",
+        result.unmatched_clusters.len()
+    )?;
     for cluster in &result.unmatched_clusters {
-        println!(
+        writeln!(
+            out,
             "  start_s={:.0} duration_s={:.0} pings={}",
             cluster.start_time_s,
             cluster.duration_s(),
             cluster.pings.len()
-        );
+        )?;
     }
 
     assert!(
@@ -112,4 +112,5 @@ fn main() {
         !result.unmatched_clusters.is_empty(),
         "expected an orphan dwell far from the catalog"
     );
+    Ok(())
 }

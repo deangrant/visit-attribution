@@ -2,6 +2,11 @@
 
 use crate::error::{Error, Result};
 
+/// Convert a collection length to `f64` without a direct `usize` cast.
+pub fn len_f64(n: usize) -> f64 {
+    f64::from(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
 /// Geographic coordinate in WGS84 degrees (latitude, longitude).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -14,7 +19,7 @@ pub struct Point {
 impl Point {
     /// Create a point from latitude and longitude in degrees.
     #[must_use]
-    pub fn new(lat: f64, lon: f64) -> Self {
+    pub const fn new(lat: f64, lon: f64) -> Self {
         Self { lat, lon }
     }
 }
@@ -46,7 +51,7 @@ pub struct GpsPing {
 impl GpsPing {
     /// Create a ping from lat, lon, time (seconds), and horizontal accuracy.
     #[must_use]
-    pub fn new(lat: f64, lon: f64, time_s: f64, horizontal_accuracy_m: f64) -> Self {
+    pub const fn new(lat: f64, lon: f64, time_s: f64, horizontal_accuracy_m: f64) -> Self {
         Self {
             point: Point::new(lat, lon),
             time_s,
@@ -77,7 +82,12 @@ pub struct Place {
 impl Place {
     /// Build a place from id, polygon, centroid, and optional NAICS.
     #[must_use]
-    pub fn new(id: PlaceId, polygon: Vec<Point>, centroid: Point, naics: Option<u32>) -> Self {
+    pub const fn new(
+        id: PlaceId,
+        polygon: Vec<Point>,
+        centroid: Point,
+        naics: Option<u32>,
+    ) -> Self {
         Self {
             id,
             polygon,
@@ -146,7 +156,7 @@ impl Cluster {
                 "cluster requires at least one ping".into(),
             ));
         }
-        let n = pings.len() as f64;
+        let n = len_f64(pings.len());
         let lat = pings.iter().map(|p| p.point.lat).sum::<f64>() / n;
         let lon = pings.iter().map(|p| p.point.lon).sum::<f64>() / n;
         let start_time_s = pings.iter().map(|p| p.time_s).fold(f64::INFINITY, f64::min);
@@ -175,9 +185,16 @@ impl Cluster {
             return 0;
         }
         let hour = (self.start_time_s.rem_euclid(86_400.0) / 3600.0).floor();
-        // rem_euclid keeps seconds in [0, 86400); hour is in [0, 23].
-        hour as u8
+        hour_bucket(hour)
     }
+}
+
+fn hour_bucket(hour: f64) -> u8 {
+    let mut bucket = 0u8;
+    while bucket < 23 && f64::from(bucket) + 1.0 <= hour {
+        bucket += 1;
+    }
+    bucket
 }
 
 /// A cluster attributed to a single place.
@@ -196,6 +213,7 @@ pub struct Visit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
 
     #[test]
     fn naics4_takes_most_significant_four_digits() {
@@ -212,38 +230,42 @@ mod tests {
     }
 
     #[test]
-    fn from_pings_rejects_empty() {
-        let err = Cluster::from_pings(vec![]).unwrap_err();
+    fn from_pings_rejects_empty() -> Result<()> {
+        let err = crate::test_util::err(Cluster::from_pings(vec![]))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn from_pings_uses_single_ping_as_centroid() {
+    fn from_pings_uses_single_ping_as_centroid() -> Result<()> {
         let ping = GpsPing::new(1.5, -2.5, 10.0, 5.0);
-        let cluster = Cluster::from_pings(vec![ping]).unwrap();
+        let cluster = Cluster::from_pings(vec![ping])?;
         assert_eq!(cluster.centroid, Point::new(1.5, -2.5));
         assert!((cluster.start_time_s - 10.0).abs() < f64::EPSILON);
         assert!((cluster.end_time_s - 10.0).abs() < f64::EPSILON);
+        Ok(())
     }
 
-    fn cluster_at(time_s: f64) -> Cluster {
-        Cluster::from_pings(vec![GpsPing::new(0.0, 0.0, time_s, 5.0)]).unwrap()
-    }
-
-    #[test]
-    fn hour_of_day_boundaries_and_wrap() {
-        assert_eq!(cluster_at(0.0).hour_of_day(), 0);
-        assert_eq!(cluster_at(3_600.0).hour_of_day(), 1);
-        assert_eq!(cluster_at(86_399.0).hour_of_day(), 23);
-        assert_eq!(cluster_at(86_400.0).hour_of_day(), 0);
-        assert_eq!(cluster_at(3_600.5).hour_of_day(), 1);
-        assert_eq!(cluster_at(-1.0).hour_of_day(), 23);
+    fn cluster_at(time_s: f64) -> Result<Cluster> {
+        Cluster::from_pings(vec![GpsPing::new(0.0, 0.0, time_s, 5.0)])
     }
 
     #[test]
-    fn hour_of_day_non_finite_is_zero() {
-        assert_eq!(cluster_at(f64::NAN).hour_of_day(), 0);
-        assert_eq!(cluster_at(f64::INFINITY).hour_of_day(), 0);
-        assert_eq!(cluster_at(f64::NEG_INFINITY).hour_of_day(), 0);
+    fn hour_of_day_boundaries_and_wrap() -> Result<()> {
+        assert_eq!(cluster_at(0.0)?.hour_of_day(), 0);
+        assert_eq!(cluster_at(3_600.0)?.hour_of_day(), 1);
+        assert_eq!(cluster_at(86_399.0)?.hour_of_day(), 23);
+        assert_eq!(cluster_at(86_400.0)?.hour_of_day(), 0);
+        assert_eq!(cluster_at(3_600.5)?.hour_of_day(), 1);
+        assert_eq!(cluster_at(-1.0)?.hour_of_day(), 23);
+        Ok(())
+    }
+
+    #[test]
+    fn hour_of_day_non_finite_is_zero() -> Result<()> {
+        assert_eq!(cluster_at(f64::NAN)?.hour_of_day(), 0);
+        assert_eq!(cluster_at(f64::INFINITY)?.hour_of_day(), 0);
+        assert_eq!(cluster_at(f64::NEG_INFINITY)?.hour_of_day(), 0);
+        Ok(())
     }
 }

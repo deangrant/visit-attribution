@@ -9,7 +9,7 @@ const MIN_EXTENT_DEG: f64 = 1e-6;
 
 /// Quadtree over place bounding boxes (indices into a parallel place list).
 #[derive(Debug, Clone)]
-pub(crate) struct BBoxQuadtree {
+pub struct BBoxQuadtree {
     root: Option<QuadNode>,
 }
 
@@ -21,7 +21,7 @@ enum QuadNode {
     },
     Branch {
         bounds: BBox,
-        children: Box<[QuadNode; 4]>,
+        children: Box<[Self; 4]>,
     },
 }
 
@@ -64,18 +64,18 @@ impl BBoxQuadtree {
 fn ensure_extent(mut b: BBox) -> BBox {
     if b.max_lat - b.min_lat < MIN_EXTENT_DEG {
         let mid = (b.min_lat + b.max_lat) * 0.5;
-        b.min_lat = mid - MIN_EXTENT_DEG * 0.5;
-        b.max_lat = mid + MIN_EXTENT_DEG * 0.5;
+        b.min_lat = MIN_EXTENT_DEG.mul_add(-0.5, mid);
+        b.max_lat = MIN_EXTENT_DEG.mul_add(0.5, mid);
     }
     if b.max_lon - b.min_lon < MIN_EXTENT_DEG {
         let mid = (b.min_lon + b.max_lon) * 0.5;
-        b.min_lon = mid - MIN_EXTENT_DEG * 0.5;
-        b.max_lon = mid + MIN_EXTENT_DEG * 0.5;
+        b.min_lon = MIN_EXTENT_DEG.mul_add(-0.5, mid);
+        b.max_lon = MIN_EXTENT_DEG.mul_add(0.5, mid);
     }
     b
 }
 
-fn bounds_of(node: &QuadNode) -> BBox {
+const fn bounds_of(node: &QuadNode) -> BBox {
     match node {
         QuadNode::Leaf { bounds, .. } | QuadNode::Branch { bounds, .. } => *bounds,
     }

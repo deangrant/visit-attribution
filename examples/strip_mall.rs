@@ -3,11 +3,13 @@
 //! A mall footprint qualifies for the large-POI clusterer. Interior pings still
 //! join nearby store polygons; the trained ranker prefers store A over store B.
 
+use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
+    VisitAttributor,
 };
 
-fn main() {
+fn main() -> Result<()> {
     // Mall ~0.004° on a side (~197k m²) so it clears large_poi_area_m2 = 1_000.
     let mall = Place::square(1, -0.002, -0.002, 0.004, Some(531_120));
     // Store A sits in the SW quadrant; store B in the SE — both inside the mall.
@@ -21,7 +23,7 @@ fn main() {
         GpsPing::new(-0.0007, -0.00065, 30.0, 6.0),
         GpsPing::new(-0.00068, -0.00068, 45.0, 6.0),
     ];
-    let cluster = Cluster::from_pings(pings.clone()).expect("cluster");
+    let cluster = Cluster::from_pings(pings.clone())?;
     let candidates = vec![mall.clone(), store_a.clone(), store_b.clone()];
     // Repeat the labeled example so preference learning sees a stable signal.
     let examples: Vec<LabeledExample> = (0..8)
@@ -40,33 +42,31 @@ fn main() {
             learning_rate: 0.2,
             ..TrainConfig::default()
         },
-    )
-    .expect("train");
+    )?;
 
     let config = Config::builder()
         .large_poi_area_m2(1_000.0)
         .join_radius_m(80.0)
         .min_cluster_pings(2)
-        .build()
-        .expect("config");
+        .build()?;
     let places = vec![mall, store_a, store_b];
     let result = VisitAttributor::builder()
         .config(config)
         .ranker(ranker)
-        .build()
-        .expect("build")
-        .attribute(&pings, &places)
-        .expect("attribute");
+        .build()?
+        .attribute(&pings, &places)?;
 
-    println!("visits={}", result.visits.len());
+    let mut out = io::stdout();
+    writeln!(out, "visits={}", result.visits.len())?;
     for visit in &result.visits {
-        println!(
+        writeln!(
+            out,
             "  place_id={} wins={} duration_s={:.0} candidates={:?}",
             visit.place_id,
             visit.wins,
             visit.cluster.duration_s(),
             visit.candidates
-        );
+        )?;
     }
 
     assert_eq!(result.visits.len(), 1, "expected a single strip-mall visit");
@@ -82,4 +82,5 @@ fn main() {
         result.visits[0].candidates.len() >= 2,
         "join should surface competing candidates"
     );
+    Ok(())
 }

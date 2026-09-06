@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 
 /// Tunable hyperparameters for cleaning, clustering, and place joining.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     /// Drop pings with horizontal accuracy above this many meters.
     pub max_horizontal_accuracy_m: f64,
@@ -105,7 +105,7 @@ fn require_finite(name: &str, value: f64, allow_zero: bool) -> Result<()> {
 }
 
 /// Fluent builder for [`Config`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 #[must_use]
 pub struct ConfigBuilder {
     config: Config,
@@ -118,7 +118,7 @@ impl ConfigBuilder {
     }
 
     /// Set the minimum number of pings required to form a cluster.
-    pub fn min_cluster_pings(mut self, v: usize) -> Self {
+    pub const fn min_cluster_pings(mut self, v: usize) -> Self {
         self.config.min_cluster_pings = v;
         self
     }
@@ -138,7 +138,7 @@ macro_rules! config_f64_setter {
     ($name:ident, $field:ident, $doc:expr) => {
         impl ConfigBuilder {
             #[doc = $doc]
-            pub fn $name(mut self, v: f64) -> Self {
+            pub const fn $name(mut self, v: f64) -> Self {
                 self.config.$field = v;
                 self
             }
@@ -200,36 +200,39 @@ config_f64_setter!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
 
     #[test]
-    fn default_config_validates() {
-        Config::default().validate().unwrap();
+    fn default_config_validates() -> Result<()> {
+        Config::default().validate()?;
+        Ok(())
     }
 
     #[test]
-    fn rejects_inverted_distance_thresholds() {
-        let err = Config::builder()
-            .dist_threshold_m(100.0)
-            .max_dist_threshold_m(50.0)
-            .build()
-            .unwrap_err();
+    fn rejects_inverted_distance_thresholds() -> Result<()> {
+        let err = crate::test_util::err(
+            Config::builder().dist_threshold_m(100.0).max_dist_threshold_m(50.0).build(),
+        )?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn rejects_non_positive_max_time_gap() {
-        let err = Config::builder().max_time_gap_s(0.0).build().unwrap_err();
+    fn rejects_non_positive_max_time_gap() -> Result<()> {
+        let err = crate::test_util::err(Config::builder().max_time_gap_s(0.0).build())?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn rejects_negative_join_radius_and_zero_min_pings() {
-        Config::builder().join_radius_m(0.0).build().unwrap();
-        let err = Config::builder().join_radius_m(-1.0).build().unwrap_err();
+    fn rejects_negative_join_radius_and_zero_min_pings() -> Result<()> {
+        Config::builder().join_radius_m(0.0).build()?;
+        let err = crate::test_util::err(Config::builder().join_radius_m(-1.0).build())?;
         assert!(matches!(err, Error::InvalidInput(_)));
-        let err = Config::builder().min_cluster_pings(0).build().unwrap_err();
+        let err = crate::test_util::err(Config::builder().min_cluster_pings(0).build())?;
         assert!(matches!(err, Error::InvalidInput(_)));
-        let err = Config::builder().join_radius_m(f64::NAN).build().unwrap_err();
+        let err = crate::test_util::err(Config::builder().join_radius_m(f64::NAN).build())?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 }

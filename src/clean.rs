@@ -18,7 +18,7 @@ pub trait PingCleaner {
 }
 
 /// Default cleaner matching the pipeline's pre-processing rules.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct DefaultPingCleaner {
     config: Config,
 }
@@ -26,7 +26,7 @@ pub struct DefaultPingCleaner {
 impl DefaultPingCleaner {
     /// Create a cleaner from validated configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 }
@@ -248,8 +248,7 @@ mod tests {
             GpsPing::new(0.03, 0.0, 50.0, 10.0),
         ];
         let out = clean_default(&pings);
-        let dwell: Vec<_> = out.iter().filter(|p| p.time_s <= 20.0).collect();
-        assert_eq!(dwell.len(), 3);
+        assert_eq!(out.iter().filter(|p| p.time_s <= 20.0).count(), 3);
         assert!(out.len() < pings.len());
     }
 

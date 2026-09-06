@@ -25,7 +25,8 @@ fuller context, see [README.md](README.md).
 ## Commands
 
 - [`.agents/commands/`](.agents/commands/) (symlinked from [`.cursor/commands`](.cursor/commands))
-- `/ci-check` — fmt, clippy (`-D warnings`), and test
+- `/ci-check` — fmt, clippy (`all`/`pedantic`/`nursery`, `-D warnings`),
+  rustdoc (`-D warnings`), test, and `cargo deny check` when available
 - `/run-examples` — run `basic`, `multi_stop`, `strip_mall`, `persist_model`
 - `/msrv-check` — `cargo +1.74 test`
 - `/api-surface` — checklist before expanding `pub use` in `lib.rs`

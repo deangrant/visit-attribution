@@ -92,15 +92,22 @@ pub(super) fn build_tree(xs: &[Vec<f64>], ys: &[f64], config: &TrainConfig, dept
     let Some((feature, threshold, left_idx, right_idx)) = best_split(xs, ys, config) else {
         return Node::Leaf { value: mean(ys) };
     };
-    let left_xs: Vec<Vec<f64>> = left_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
-    let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
-    let right_xs: Vec<Vec<f64>> = right_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
-    let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
+    let features_left: Vec<Vec<f64>> =
+        left_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
+    let labels_left: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
+    let features_right: Vec<Vec<f64>> =
+        right_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
+    let labels_right: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
     Node::Branch {
         feature,
         threshold,
-        left: Box::new(build_tree(&left_xs, &left_ys, config, depth + 1)),
-        right: Box::new(build_tree(&right_xs, &right_ys, config, depth + 1)),
+        left: Box::new(build_tree(&features_left, &labels_left, config, depth + 1)),
+        right: Box::new(build_tree(
+            &features_right,
+            &labels_right,
+            config,
+            depth + 1,
+        )),
     }
 }
 
@@ -112,15 +119,13 @@ fn mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         0.0
     } else {
-        values.iter().sum::<f64>() / values.len() as f64
+        values.iter().sum::<f64>() / crate::types::len_f64(values.len())
     }
 }
 
-fn best_split(
-    xs: &[Vec<f64>],
-    ys: &[f64],
-    config: &TrainConfig,
-) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
+type Split = (usize, f64, Vec<usize>, Vec<usize>);
+
+fn best_split(xs: &[Vec<f64>], ys: &[f64], config: &TrainConfig) -> Option<Split> {
     let dim = xs.first()?.len();
     let mut best_gain = 0.0;
     let mut best = None;
@@ -180,8 +185,10 @@ fn split_gain(ys: &[f64], left_idx: &[usize], right_idx: &[usize]) -> f64 {
     let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
     let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
     parent_var
-        - (left_ys.len() as f64 * variance(&left_ys) + right_ys.len() as f64 * variance(&right_ys))
-            / ys.len() as f64
+        - crate::types::len_f64(left_ys.len()).mul_add(
+            variance(&left_ys),
+            crate::types::len_f64(right_ys.len()) * variance(&right_ys),
+        ) / crate::types::len_f64(ys.len())
 }
 
 fn consider_split(
@@ -191,7 +198,7 @@ fn consider_split(
     threshold: f64,
     min_leaf: usize,
     best_gain: &mut f64,
-    best: &mut Option<(usize, f64, Vec<usize>, Vec<usize>)>,
+    best: &mut Option<Split>,
 ) {
     let (left_idx, right_idx) = partition_by_threshold(xs, feature, threshold);
     if left_idx.len() < min_leaf || right_idx.len() < min_leaf {
@@ -209,5 +216,5 @@ fn variance(values: &[f64]) -> f64 {
         return 0.0;
     }
     let m = mean(values);
-    values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / values.len() as f64
+    values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / crate::types::len_f64(values.len())
 }

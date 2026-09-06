@@ -12,7 +12,10 @@ pub fn haversine_m(a: Point, b: Point) -> f64 {
     let lat2 = b.lat.to_radians();
     let dlat = (b.lat - a.lat).to_radians();
     let dlon = (b.lon - a.lon).to_radians();
-    let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let h = (dlat / 2.0).sin().mul_add(
+        (dlat / 2.0).sin(),
+        lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2),
+    );
     2.0 * EARTH_RADIUS_M * h.sqrt().asin()
 }
 
@@ -88,7 +91,7 @@ fn point_on_segment(p: Point, a: Point, b: Point) -> bool {
     }
     let dlon = b.lon - a.lon;
     let dlat = b.lat - a.lat;
-    let cross = dlon * (p.lat - a.lat) - dlat * (p.lon - a.lon);
+    let cross = dlon.mul_add(p.lat - a.lat, -(dlat * (p.lon - a.lon)));
     cross.abs() <= ON_EDGE_DEG_EPS * (1.0 + dlon.abs() + dlat.abs())
 }
 
@@ -114,17 +117,17 @@ fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
     let aby = by - ay;
     let apx = px - ax;
     let apy = py - ay;
-    let ab2 = abx * abx + aby * aby;
+    let ab2 = abx.mul_add(abx, aby * aby);
     let t = if ab2 < 1e-18 {
         0.0
     } else {
-        ((apx * abx + apy * aby) / ab2).clamp(0.0, 1.0)
+        (apx.mul_add(abx, apy * aby) / ab2).clamp(0.0, 1.0)
     };
     let cx = ax + t * abx;
     let cy = ay + t * aby;
     let dx = px - cx;
     let dy = py - cy;
-    (dx * dx + dy * dy).sqrt()
+    dx.hypot(dy)
 }
 
 /// Distance in meters from a point to the nearest location on a polygon.
@@ -157,7 +160,7 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
         return 0.0;
     }
     // Spherical excess approximation via equirectangular shoe-lace at mean lat.
-    let mean_lat = ring.iter().map(|p| p.lat).sum::<f64>() / (ring.len() as f64);
+    let mean_lat = ring.iter().map(|p| p.lat).sum::<f64>() / crate::types::len_f64(ring.len());
     let (mx, my) = meters_to_degrees(mean_lat, 1.0);
     let mut area = 0.0;
     for window in ring.windows(2) {
@@ -168,7 +171,7 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
         let y1 = p1.lat / mx;
         let x2 = p2.lon / my;
         let y2 = p2.lat / mx;
-        area += x1 * y2 - x2 * y1;
+        area += x1.mul_add(y2, -(x2 * y1));
     }
     area.abs() * 0.5
 }
@@ -176,9 +179,13 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
 /// Axis-aligned bounding box in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BBox {
+    /// Southern edge in degrees.
     pub min_lat: f64,
+    /// Northern edge in degrees.
     pub max_lat: f64,
+    /// Western edge in degrees.
     pub min_lon: f64,
+    /// Eastern edge in degrees.
     pub max_lon: f64,
 }
 
@@ -199,8 +206,8 @@ impl BBox {
             min_lon = min_lon.min(p.lon);
             max_lon = max_lon.max(p.lon);
         }
-        let mid_lat = (min_lat + max_lat) * 0.5;
-        let (dlat, dlon) = meters_to_degrees(mid_lat, pad_m);
+        let center_lat = (min_lat + max_lat) * 0.5;
+        let (dlat, dlon) = meters_to_degrees(center_lat, pad_m);
         Some(Self {
             min_lat: min_lat - dlat,
             max_lat: max_lat + dlat,

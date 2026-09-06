@@ -6,14 +6,19 @@ alwaysApply: true
 # visit-attribution core
 
 - **Std-first:** do not add `[dependencies]` without an explicit human ask.
-- `unsafe_code = forbid`. Clippy `all = deny`. CI runs
-  `cargo clippy --all-targets -- -D warnings`.
-- MSRV **1.74**. CI is stable-only—do not use post-1.74 syntax.
+- `unsafe_code = forbid`. Clippy `all`/`pedantic`/`nursery`/`cargo` deny
+  (`clippy.toml` cognitive complexity 8). Rustdoc `all = deny`. Supply chain:
+  `deny.toml` + `.github/workflows/supply-chain.yml`.
+- MSRV **1.74**. CI is stable-only—do not use post-1.74 syntax
+  (`#[expect]`, `reason =`, `unfulfilled_lint_expectations` are 1.81+).
 - `Cargo.lock` is gitignored on purpose (library crate).
 - Verify before finishing Rust work:
   - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets -- -D warnings`
-  - `cargo test`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+  - `cargo test --all-targets --all-features`
+  - `cargo +1.74 test` when touching MSRV-sensitive syntax
+  - `cargo deny check` when `deny.toml` or dependencies change
 - `VisitAttributor` requires a ranker. Training needs preference pairs (true
   place among ≥2 candidates).
 - Prefer `codegraph_explore` with this project path before broad greps when
