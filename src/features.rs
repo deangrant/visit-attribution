@@ -129,28 +129,37 @@ fn ranks(values: &[f64]) -> Vec<f64> {
     let mut rank = 1.0_f64;
     let mut i = 0usize;
     while i < pairs.len() {
-        let mut j = i + 1;
-        while j < pairs.len() {
-            let Some(left) = pairs.get(i) else {
-                break;
-            };
-            let Some(right) = pairs.get(j) else {
-                break;
-            };
-            if (right.0 - left.0).abs() >= 1e-9 {
-                break;
-            }
-            j += 1;
-        }
-        for pair in pairs.iter().take(j).skip(i) {
-            if let Some(slot) = out.get_mut(pair.1) {
-                *slot = rank;
-            }
-        }
+        let j = tie_end(&pairs, i);
+        assign_rank(&mut out, &pairs, i, j, rank);
         rank += (j - i) as f64;
         i = j;
     }
     out
+}
+
+fn tie_end(pairs: &[(f64, usize)], i: usize) -> usize {
+    let mut j = i + 1;
+    while j < pairs.len() {
+        let Some(left) = pairs.get(i) else {
+            break;
+        };
+        let Some(right) = pairs.get(j) else {
+            break;
+        };
+        if (right.0 - left.0).abs() >= 1e-9 {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+fn assign_rank(out: &mut [f64], pairs: &[(f64, usize)], i: usize, j: usize, rank: f64) {
+    for pair in pairs.iter().take(j).skip(i) {
+        if let Some(slot) = out.get_mut(pair.1) {
+            *slot = rank;
+        }
+    }
 }
 
 /// Preference-learning pairs: difference vectors and ±1 labels.
@@ -327,6 +336,14 @@ mod tests {
         assert!((rows[1].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
         assert!((rows[2].1[unk_base + hour]).abs() < f64::EPSILON);
         assert!((rows[2].1[4 + hour] - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dense_ranks_empty_unique_and_ties() {
+        assert!(ranks(&[]).is_empty());
+        assert_eq!(ranks(&[3.0, 1.0, 2.0]), vec![3.0, 1.0, 2.0]);
+        assert_eq!(ranks(&[1.0, 1.0, 2.0]), vec![1.0, 1.0, 3.0]);
+        assert_eq!(ranks(&[5.0]), vec![1.0]);
     }
 
     #[test]

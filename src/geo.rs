@@ -60,16 +60,19 @@ pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
         let [pi, pj] = window else {
             continue;
         };
-        if (pi.lat - pj.lat).abs() < f64::EPSILON {
-            continue;
-        }
-        let intersect = ((pi.lat > point.lat) != (pj.lat > point.lat))
-            && (point.lon < (pj.lon - pi.lon) * (point.lat - pi.lat) / (pj.lat - pi.lat) + pi.lon);
-        if intersect {
+        if ray_hits_edge(point, *pi, *pj) {
             inside = !inside;
         }
     }
     inside
+}
+
+fn ray_hits_edge(point: Point, pi: Point, pj: Point) -> bool {
+    if (pi.lat - pj.lat).abs() < f64::EPSILON {
+        return false;
+    }
+    ((pi.lat > point.lat) != (pj.lat > point.lat))
+        && (point.lon < (pj.lon - pi.lon) * (point.lat - pi.lat) / (pj.lat - pi.lat) + pi.lon)
 }
 
 /// Absolute epsilon in degrees for on-edge collinearity / bbox padding.
@@ -277,5 +280,14 @@ mod tests {
     #[test]
     fn ring_area_positive() {
         assert!(ring_area_m2(&unit_square()) > 0.0);
+    }
+
+    #[test]
+    fn point_in_polygon_rejects_short_rings() {
+        assert!(!point_in_polygon(Point::new(0.0, 0.0), &[]));
+        assert!(!point_in_polygon(
+            Point::new(0.0, 0.0),
+            &[Point::new(0.0, 0.0), Point::new(1.0, 0.0)],
+        ));
     }
 }

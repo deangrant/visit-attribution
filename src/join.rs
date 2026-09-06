@@ -101,23 +101,36 @@ impl PlaceIndex for QuadtreePlaceIndex {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for idx in hits {
-            if !seen.insert(idx) {
-                continue;
-            }
-            let Some(place) = self.places.get(idx) else {
-                continue;
-            };
-            let Some(&bbox) = self.bboxes.get(idx) else {
-                continue;
-            };
-            if !bbox.intersects(query_bbox) {
-                continue;
-            }
-            if within_join_radius(cluster, place, radius) {
-                out.push(place.clone());
+            if let Some(place) = self.accept_hit(idx, query_bbox, &mut seen, radius, cluster) {
+                out.push(place);
             }
         }
         out
+    }
+}
+
+impl QuadtreePlaceIndex {
+    fn accept_hit(
+        &self,
+        idx: usize,
+        query_bbox: BBox,
+        seen: &mut HashSet<usize>,
+        radius: f64,
+        cluster: &Cluster,
+    ) -> Option<Place> {
+        if !seen.insert(idx) {
+            return None;
+        }
+        let place = self.places.get(idx)?;
+        let &bbox = self.bboxes.get(idx)?;
+        if !bbox.intersects(query_bbox) {
+            return None;
+        }
+        if within_join_radius(cluster, place, radius) {
+            Some(place.clone())
+        } else {
+            None
+        }
     }
 }
 

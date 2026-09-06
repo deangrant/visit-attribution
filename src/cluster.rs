@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::geo::{haversine_m, point_in_polygon, ring_area_m2};
-use crate::types::{Cluster, GpsPing, Place};
+use crate::types::{Cluster, GpsPing, Place, Point};
 
 /// Groups cleaned pings into visit candidates without ranking places.
 ///
@@ -55,48 +55,75 @@ impl LargePoiClusterer {
             let Some(seed) = pings.get(i) else {
                 break;
             };
-            let place_id = large
-                .iter()
-                .filter(|place| point_in_polygon(seed.point, &place.polygon))
-                .min_by(|a, b| {
-                    ring_area_m2(&a.polygon)
-                        .partial_cmp(&ring_area_m2(&b.polygon))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.id.cmp(&b.id))
-                })
-                .map(|p| p.id);
-            let Some(pid) = place_id else {
+            let Some(pid) = smallest_containing_large_place(seed.point, &large) else {
                 i += 1;
                 continue;
             };
             let start = i;
-            i += 1;
-            while i < pings.len() {
-                let Some(cur) = pings.get(i) else {
-                    break;
-                };
-                let still = large
-                    .iter()
-                    .any(|place| place.id == pid && point_in_polygon(cur.point, &place.polygon));
-                if !still {
-                    break;
-                }
-                i += 1;
-            }
-            if i - start >= self.config.min_cluster_pings {
-                if let Some(flags) = used.get_mut(start..i) {
-                    for flag in flags {
-                        *flag = true;
-                    }
-                }
-                if let Some(slice) = pings.get(start..i) {
-                    if let Ok(cluster) = Cluster::from_pings(slice.to_vec()) {
-                        clusters.push(cluster);
-                    }
-                }
-            }
+            i = extend_large_run(pings, &large, pid, start);
+            push_large_cluster(
+                pings,
+                start,
+                i,
+                self.config.min_cluster_pings,
+                &mut used,
+                &mut clusters,
+            );
         }
         (clusters, used)
+    }
+}
+
+fn smallest_containing_large_place(point: Point, large: &[&Place]) -> Option<u64> {
+    large
+        .iter()
+        .filter(|place| point_in_polygon(point, &place.polygon))
+        .min_by(|a, b| {
+            ring_area_m2(&a.polygon)
+                .partial_cmp(&ring_area_m2(&b.polygon))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        })
+        .map(|p| p.id)
+}
+
+fn extend_large_run(pings: &[GpsPing], large: &[&Place], pid: u64, start: usize) -> usize {
+    let mut i = start + 1;
+    while i < pings.len() {
+        let Some(cur) = pings.get(i) else {
+            break;
+        };
+        let still = large
+            .iter()
+            .any(|place| place.id == pid && point_in_polygon(cur.point, &place.polygon));
+        if !still {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn push_large_cluster(
+    pings: &[GpsPing],
+    start: usize,
+    end: usize,
+    min_cluster_pings: usize,
+    used: &mut [bool],
+    clusters: &mut Vec<Cluster>,
+) {
+    if end - start < min_cluster_pings {
+        return;
+    }
+    if let Some(flags) = used.get_mut(start..end) {
+        for flag in flags {
+            *flag = true;
+        }
+    }
+    if let Some(slice) = pings.get(start..end) {
+        if let Ok(cluster) = Cluster::from_pings(slice.to_vec()) {
+            clusters.push(cluster);
+        }
     }
 }
 
@@ -145,33 +172,62 @@ impl Clusterer for TimeAwareDensityClusterer {
                 let Some(&cur) = pings.get(i) else {
                     break;
                 };
-                if cur.time_s - last.time_s > max_time_gap_s {
-                    break;
-                }
-                let to_last = haversine_m(last.point, cur.point);
-                if to_last > max_dist_threshold_m {
-                    break;
-                }
-                // Require proximity to a recent member within dist_threshold.
-                let near = members
-                    .iter()
-                    .rev()
-                    .take(8)
-                    .any(|m| haversine_m(m.point, cur.point) <= dist_threshold_m);
-                if !near && to_last > dist_threshold_m {
+                if !try_extend_density_member(
+                    last,
+                    cur,
+                    &members,
+                    dist_threshold_m,
+                    max_dist_threshold_m,
+                    max_time_gap_s,
+                ) {
                     break;
                 }
                 members.push(cur);
                 last = cur;
                 i += 1;
             }
-            if members.len() >= min_cluster_pings {
-                if let Ok(cluster) = Cluster::from_pings(members) {
-                    clusters.push(cluster);
-                }
-            }
+            push_if_dense_enough(&mut clusters, members, min_cluster_pings);
         }
         clusters
+    }
+}
+
+fn try_extend_density_member(
+    last: GpsPing,
+    cur: GpsPing,
+    members: &[GpsPing],
+    dist_threshold_m: f64,
+    max_dist_threshold_m: f64,
+    max_time_gap_s: f64,
+) -> bool {
+    if cur.time_s - last.time_s > max_time_gap_s {
+        return false;
+    }
+    let to_last = haversine_m(last.point, cur.point);
+    if to_last > max_dist_threshold_m {
+        return false;
+    }
+    // Require proximity to a recent member within dist_threshold.
+    let near = members
+        .iter()
+        .rev()
+        .take(8)
+        .any(|m| haversine_m(m.point, cur.point) <= dist_threshold_m);
+    if !near && to_last > dist_threshold_m {
+        return false;
+    }
+    true
+}
+
+fn push_if_dense_enough(
+    clusters: &mut Vec<Cluster>,
+    members: Vec<GpsPing>,
+    min_cluster_pings: usize,
+) {
+    if members.len() >= min_cluster_pings {
+        if let Ok(cluster) = Cluster::from_pings(members) {
+            clusters.push(cluster);
+        }
     }
 }
 
@@ -201,24 +257,41 @@ impl Clusterer for TwoPassClusterer {
         let (mut clusters, used) = self.large.extract(pings, places);
         // Density-cluster each contiguous unused run so gaps left by the
         // large-POI pass cannot merge non-adjacent stays into one visit.
-        let mut run_start: Option<usize> = None;
-        for (idx, &is_used) in used.iter().enumerate() {
-            if !is_used {
-                if run_start.is_none() {
-                    run_start = Some(idx);
-                }
-            } else if let Some(start) = run_start.take() {
-                if let Some(run) = pings.get(start..idx) {
-                    clusters.extend(self.density.cluster(run, &[]));
-                }
-            }
-        }
-        if let Some(start) = run_start {
-            if let Some(run) = pings.get(start..) {
-                clusters.extend(self.density.cluster(run, &[]));
-            }
-        }
+        density_cluster_unused_runs(&self.density, pings, &used, &mut clusters);
         clusters
+    }
+}
+
+fn extend_density_run(
+    density: &TimeAwareDensityClusterer,
+    pings: &[GpsPing],
+    start: usize,
+    end: usize,
+    clusters: &mut Vec<Cluster>,
+) {
+    if let Some(run) = pings.get(start..end) {
+        clusters.extend(density.cluster(run, &[]));
+    }
+}
+
+fn density_cluster_unused_runs(
+    density: &TimeAwareDensityClusterer,
+    pings: &[GpsPing],
+    used: &[bool],
+    clusters: &mut Vec<Cluster>,
+) {
+    let mut run_start: Option<usize> = None;
+    for (idx, &is_used) in used.iter().enumerate() {
+        if !is_used {
+            if run_start.is_none() {
+                run_start = Some(idx);
+            }
+        } else if let Some(start) = run_start.take() {
+            extend_density_run(density, pings, start, idx, clusters);
+        }
+    }
+    if let Some(start) = run_start {
+        extend_density_run(density, pings, start, pings.len(), clusters);
     }
 }
 
@@ -371,5 +444,17 @@ mod tests {
         );
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].pings.len(), 3);
+
+        // ~222 m hop exceeds max_dist_threshold_m (100 m).
+        let jumped = density().cluster(
+            &[
+                ping(0.0, 0.0, 0.0),
+                ping(0.0001, 0.0, 10.0),
+                ping(0.002, 0.0, 20.0),
+                ping(0.0021, 0.0, 30.0),
+            ],
+            &[],
+        );
+        assert!(!jumped.iter().any(|c| c.start_time_s < 10.0 && c.end_time_s > 20.0));
     }
 }

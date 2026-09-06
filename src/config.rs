@@ -78,12 +78,7 @@ impl Config {
             ("large_poi_area_m2", self.large_poi_area_m2, false),
             ("join_radius_m", self.join_radius_m, true),
         ] {
-            if !value.is_finite() || (allow_zero && value < 0.0) || (!allow_zero && value <= 0.0) {
-                return Err(Error::InvalidInput(format!(
-                    "`{name}` must be finite and {}",
-                    if allow_zero { ">= 0" } else { "> 0" }
-                )));
-            }
+            require_finite(name, value, allow_zero)?;
         }
         if self.max_dist_threshold_m < self.dist_threshold_m {
             return Err(Error::InvalidInput(
@@ -97,6 +92,16 @@ impl Config {
         }
         Ok(())
     }
+}
+
+fn require_finite(name: &str, value: f64, allow_zero: bool) -> Result<()> {
+    if !value.is_finite() || (allow_zero && value < 0.0) || (!allow_zero && value <= 0.0) {
+        return Err(Error::InvalidInput(format!(
+            "`{name}` must be finite and {}",
+            if allow_zero { ">= 0" } else { "> 0" }
+        )));
+    }
+    Ok(())
 }
 
 /// Fluent builder for [`Config`].
@@ -214,6 +219,17 @@ mod tests {
     #[test]
     fn rejects_non_positive_max_time_gap() {
         let err = Config::builder().max_time_gap_s(0.0).build().unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+    }
+
+    #[test]
+    fn rejects_negative_join_radius_and_zero_min_pings() {
+        Config::builder().join_radius_m(0.0).build().unwrap();
+        let err = Config::builder().join_radius_m(-1.0).build().unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+        let err = Config::builder().min_cluster_pings(0).build().unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)));
+        let err = Config::builder().join_radius_m(f64::NAN).build().unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)));
     }
 }

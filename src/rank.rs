@@ -113,31 +113,38 @@ impl Ranker for GbdtRanker {
             return Ok((only.id, 0));
         }
         let rows = absolute_features(&self.model.schema, cluster, candidates);
-        let mut wins = vec![0_u32; rows.len()];
-        let mut diff = Vec::with_capacity(self.model.schema.dim());
-        for (i, left) in rows.iter().enumerate() {
-            for (offset, right) in rows.iter().enumerate().skip(i + 1) {
-                let j = offset;
-                diff.clear();
-                diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
-                let score = self.model.predict_raw(&diff)?;
-                if score >= 0.0 {
-                    if let Some(w) = wins.get_mut(i) {
-                        *w += 1;
-                    }
-                } else if let Some(w) = wins.get_mut(j) {
+        let wins = pairwise_wins(&self.model, &rows)?;
+        pick_winner_by_wins(&rows, &wins)
+    }
+}
+
+fn pairwise_wins(model: &GbdtModel, rows: &[(PlaceId, Vec<f64>)]) -> Result<Vec<u32>> {
+    let mut wins = vec![0_u32; rows.len()];
+    let mut diff = Vec::with_capacity(model.schema.dim());
+    for (i, left) in rows.iter().enumerate() {
+        for (offset, right) in rows.iter().enumerate().skip(i + 1) {
+            let j = offset;
+            diff.clear();
+            diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
+            let score = model.predict_raw(&diff)?;
+            if score >= 0.0 {
+                if let Some(w) = wins.get_mut(i) {
                     *w += 1;
                 }
+            } else if let Some(w) = wins.get_mut(j) {
+                *w += 1;
             }
         }
-        let (best_id, best_wins) = rows
-            .iter()
-            .zip(wins.iter())
-            .max_by(|(a, aw), (b, bw)| aw.cmp(bw).then_with(|| b.0.cmp(&a.0)))
-            .map(|((id, _), &w)| (*id, w))
-            .ok_or_else(|| Error::InvalidInput("cannot rank an empty candidate set".into()))?;
-        Ok((best_id, best_wins))
     }
+    Ok(wins)
+}
+
+fn pick_winner_by_wins(rows: &[(PlaceId, Vec<f64>)], wins: &[u32]) -> Result<(PlaceId, u32)> {
+    rows.iter()
+        .zip(wins.iter())
+        .max_by(|(a, aw), (b, bw)| aw.cmp(bw).then_with(|| b.0.cmp(&a.0)))
+        .map(|((id, _), &w)| (*id, w))
+        .ok_or_else(|| Error::InvalidInput("cannot rank an empty candidate set".into()))
 }
 
 /// Attach a ranked place to a cluster, producing a [`Visit`].

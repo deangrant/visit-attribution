@@ -64,6 +64,12 @@ fn take_masked(pings: &[GpsPing], keep: &[bool]) -> Vec<GpsPing> {
         .collect()
 }
 
+fn clear_keep(keep: &mut [bool], i: usize) {
+    if let Some(flag) = keep.get_mut(i) {
+        *flag = false;
+    }
+}
+
 fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
     if pings.is_empty() {
         return Vec::new();
@@ -76,17 +82,13 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
         };
         let dt = ping.time_s - prev.time_s;
         if dt <= 0.0 {
-            if let Some(flag) = keep.get_mut(i) {
-                *flag = false;
-            }
+            clear_keep(&mut keep, i);
             continue;
         }
         let dist = haversine_m(prev.point, ping.point);
         if dist / dt > max_speed_m_s {
             // Drop the later ping of an impossible jump from the last kept.
-            if let Some(flag) = keep.get_mut(i) {
-                *flag = false;
-            }
+            clear_keep(&mut keep, i);
         } else {
             last_kept = i;
         }
@@ -129,6 +131,35 @@ fn mark_fast_arrivals(
     }
 }
 
+fn advance_window_left(pings: &[GpsPing], left: &mut usize, right: usize, window_s: f64) {
+    let Some(right_ping) = pings.get(right) else {
+        return;
+    };
+    while *left < right {
+        let Some(left_ping) = pings.get(*left) else {
+            break;
+        };
+        if right_ping.time_s - left_ping.time_s <= window_s {
+            break;
+        }
+        *left += 1;
+    }
+}
+
+fn window_is_driving(window: &[GpsPing], linearity_threshold: f64, driving_speed_m_s: f64) -> bool {
+    let path = window_path_m(window);
+    let (Some(first), Some(last)) = (window.first(), window.last()) else {
+        return false;
+    };
+    let net = haversine_m(first.point, last.point);
+    if net < 1.0 {
+        return false;
+    }
+    let linearity = path / net;
+    let speed = path / (last.time_s - first.time_s).max(1e-6);
+    linearity <= linearity_threshold && speed >= driving_speed_m_s
+}
+
 fn filter_driving(
     pings: &[GpsPing],
     linearity_threshold: f64,
@@ -141,35 +172,14 @@ fn filter_driving(
     let mut drop = vec![false; pings.len()];
     let mut left = 0usize;
     for right in 0..pings.len() {
-        let Some(right_ping) = pings.get(right) else {
-            break;
-        };
-        while left < right {
-            let Some(left_ping) = pings.get(left) else {
-                break;
-            };
-            if right_ping.time_s - left_ping.time_s <= window_s {
-                break;
-            }
-            left += 1;
-        }
+        advance_window_left(pings, &mut left, right, window_s);
         if right - left + 1 < 3 {
             continue;
         }
         let Some(window) = pings.get(left..=right) else {
             continue;
         };
-        let path = window_path_m(window);
-        let (Some(first), Some(last)) = (window.first(), window.last()) else {
-            continue;
-        };
-        let net = haversine_m(first.point, last.point);
-        if net < 1.0 {
-            continue;
-        }
-        let linearity = path / net;
-        let speed = path / (last.time_s - first.time_s).max(1e-6);
-        if linearity <= linearity_threshold && speed >= driving_speed_m_s {
+        if window_is_driving(window, linearity_threshold, driving_speed_m_s) {
             // Drop only arrivals on fast hops so dwell edges in the window survive.
             mark_fast_arrivals(pings, left, right, driving_speed_m_s, &mut drop);
         }
@@ -273,5 +283,40 @@ mod tests {
         assert!((out[0].time_s - 0.0).abs() < f64::EPSILON);
         assert!((out[1].time_s - 10.0).abs() < f64::EPSILON);
         assert!((out[2].time_s - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn jumpy_filter_empty_and_short_inputs() {
+        assert!(filter_jumpy(&[], 50.0).is_empty());
+        let one = [GpsPing::new(0.0, 0.0, 0.0, 10.0)];
+        assert_eq!(filter_jumpy(&one, 50.0).len(), 1);
+        assert_eq!(filter_driving(&one, 1.15, 60.0, 8.0).len(), 1);
+    }
+
+    #[test]
+    fn driving_filter_drops_fast_linear_arrivals() {
+        // ~33 m hops / 3 s ≈ 11 m/s: above driving_speed, below max_speed.
+        let pings = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0003, 0.0, 3.0, 10.0),
+            GpsPing::new(0.0006, 0.0, 6.0, 10.0),
+            GpsPing::new(0.0009, 0.0, 9.0, 10.0),
+        ];
+        let cfg = Config::default();
+        let out = filter_driving(
+            &pings,
+            cfg.linearity_threshold,
+            cfg.linearity_window_s,
+            cfg.driving_speed_m_s,
+        );
+        assert_eq!(out.first().map(|p| p.time_s), Some(0.0));
+        assert!(out.len() < pings.len());
+
+        let dwell = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0, 0.0, 10.0, 10.0),
+            GpsPing::new(0.0, 0.0, 20.0, 10.0),
+        ];
+        assert_eq!(filter_driving(&dwell, 1.15, 60.0, 8.0).len(), 3);
     }
 }
