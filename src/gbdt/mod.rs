@@ -1,6 +1,7 @@
 //! In-crate gradient-boosted decision trees for preference scores.
 
 mod format;
+mod train;
 
 use std::fs;
 use std::path::Path;
@@ -18,7 +19,7 @@ const MAX_NODES_PER_TREE: usize = 8192;
 const MAX_MODEL_BYTES: usize = 8 * 1024 * 1024;
 
 /// Hyperparameters for GBDT training.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrainConfig {
     /// Number of boosting rounds.
     pub n_trees: usize,
@@ -50,16 +51,24 @@ impl Default for TrainConfig {
     }
 }
 
+/// One node in a trained preference tree.
 #[derive(Debug, Clone, PartialEq)]
-enum Node {
+pub enum Node {
+    /// Terminal score.
     Leaf {
+        /// Predicted residual.
         value: f64,
     },
+    /// Split on a feature threshold.
     Branch {
+        /// Feature index in the difference vector.
         feature: usize,
+        /// Values `<= threshold` take the left child.
         threshold: f64,
-        left: Box<Node>,
-        right: Box<Node>,
+        /// Left subtree.
+        left: Box<Self>,
+        /// Right subtree.
+        right: Box<Self>,
     },
 }
 
@@ -87,67 +96,16 @@ impl GbdtModel {
         ys: &[f64],
         config: &TrainConfig,
     ) -> Result<Self> {
-        if xs.is_empty() || ys.is_empty() || xs.len() != ys.len() {
-            return Err(Error::InvalidInput(
-                "training set must be non-empty with matching lengths".into(),
-            ));
-        }
-        let dim = schema.dim();
-        for (i, row) in xs.iter().enumerate() {
-            if row.len() != dim {
-                return Err(Error::InvalidInput(format!(
-                    "row {i} has width {}, expected {dim}",
-                    row.len()
-                )));
-            }
-        }
-        if config.n_trees == 0 || config.min_leaf == 0 || config.subsample_stride == 0 {
-            return Err(Error::InvalidInput(
-                "n_trees, min_leaf, and subsample_stride must be > 0".into(),
-            ));
-        }
-        if config.n_trees > MAX_TREES {
-            return Err(Error::InvalidInput(format!(
-                "n_trees {} exceeds limit {MAX_TREES}",
-                config.n_trees
-            )));
-        }
-        if config.max_depth > MAX_TREE_DEPTH {
-            return Err(Error::InvalidInput(format!(
-                "max_depth {} exceeds limit {MAX_TREE_DEPTH}",
-                config.max_depth
-            )));
-        }
+        train::validate_xy(xs, ys, schema.dim())?;
+        train::validate_train_config(config)?;
         let base_score = 0.0;
         let mut preds = vec![base_score; xs.len()];
         let mut trees = Vec::with_capacity(config.n_trees);
         let indices: Vec<usize> = (0..xs.len()).step_by(config.subsample_stride).collect();
         for _ in 0..config.n_trees {
-            let mut residuals = Vec::with_capacity(indices.len());
-            let mut sample_x = Vec::with_capacity(indices.len());
-            for &i in &indices {
-                let Some(&pred) = preds.get(i) else {
-                    continue;
-                };
-                let Some(&y) = ys.get(i) else {
-                    continue;
-                };
-                let Some(row) = xs.get(i) else {
-                    continue;
-                };
-                let p = sigmoid(pred);
-                // Map ±1 labels to {0,1} for the logistic residual.
-                let y01 = if y > 0.0 { 1.0 } else { 0.0 };
-                residuals.push(y01 - p);
-                sample_x.push(row.clone());
-            }
-            let tree = build_tree(&sample_x, &residuals, config, 0);
-            for (i, row) in xs.iter().enumerate() {
-                let Some(pred) = preds.get_mut(i) else {
-                    continue;
-                };
-                *pred += config.learning_rate * eval_tree(&tree, row)?;
-            }
+            let (residuals, sample_x) = train::build_residuals(xs, ys, &preds, &indices);
+            let tree = train::build_tree(&sample_x, &residuals, config, 0);
+            train::apply_tree(&mut preds, xs, &tree, config.learning_rate)?;
             trees.push(tree);
         }
         Ok(Self {
@@ -174,7 +132,7 @@ impl GbdtModel {
         }
         let mut s = self.base_score;
         for tree in &self.trees {
-            s += self.learning_rate * eval_tree(tree, x)?;
+            s = self.learning_rate.mul_add(eval_tree(tree, x)?, s);
         }
         Ok(s)
     }
@@ -208,98 +166,12 @@ impl GbdtModel {
     }
 }
 
-fn sigmoid(x: f64) -> f64 {
-    1.0 / (1.0 + (-x).exp())
-}
-
-fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        0.0
-    } else {
-        values.iter().sum::<f64>() / values.len() as f64
-    }
-}
-
-fn build_tree(xs: &[Vec<f64>], ys: &[f64], config: &TrainConfig, depth: usize) -> Node {
-    let all_equal = ys.first().is_some_and(|&y0| ys.iter().all(|&y| (y - y0).abs() < 1e-12));
-    if xs.len() < config.min_leaf * 2 || depth >= config.max_depth || all_equal {
-        return Node::Leaf { value: mean(ys) };
-    }
-    let Some((feature, threshold, left_idx, right_idx)) = best_split(xs, ys, config) else {
-        return Node::Leaf { value: mean(ys) };
-    };
-    let left_xs: Vec<Vec<f64>> = left_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
-    let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
-    let right_xs: Vec<Vec<f64>> = right_idx.iter().filter_map(|&i| xs.get(i).cloned()).collect();
-    let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
-    Node::Branch {
-        feature,
-        threshold,
-        left: Box::new(build_tree(&left_xs, &left_ys, config, depth + 1)),
-        right: Box::new(build_tree(&right_xs, &right_ys, config, depth + 1)),
-    }
-}
-
-fn best_split(
-    xs: &[Vec<f64>],
-    ys: &[f64],
-    config: &TrainConfig,
-) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
-    let dim = xs.first()?.len();
-    let mut best_gain = 0.0;
-    let mut best = None;
-    for f in 0..dim {
-        let mut vals: Vec<f64> = xs.iter().filter_map(|r| r.get(f).copied()).collect();
-        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        vals.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
-        if vals.len() < 2 {
-            continue;
-        }
-        let step = (vals.len() / config.max_bins.max(1)).max(1);
-        for (k, &threshold) in vals.iter().enumerate().step_by(step) {
-            if k + 1 == vals.len() {
-                break;
-            }
-            let mut left_idx = Vec::new();
-            let mut right_idx = Vec::new();
-            for (i, row) in xs.iter().enumerate() {
-                let Some(&value) = row.get(f) else {
-                    continue;
-                };
-                if value <= threshold {
-                    left_idx.push(i);
-                } else {
-                    right_idx.push(i);
-                }
-            }
-            if left_idx.len() < config.min_leaf || right_idx.len() < config.min_leaf {
-                continue;
-            }
-            let parent_var = variance(ys);
-            let left_ys: Vec<f64> = left_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
-            let right_ys: Vec<f64> = right_idx.iter().filter_map(|&i| ys.get(i).copied()).collect();
-            let gain = parent_var
-                - (left_ys.len() as f64 * variance(&left_ys)
-                    + right_ys.len() as f64 * variance(&right_ys))
-                    / ys.len() as f64;
-            if gain > best_gain {
-                best_gain = gain;
-                best = Some((f, threshold, left_idx, right_idx));
-            }
-        }
-    }
-    best
-}
-
-fn variance(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let m = mean(values);
-    values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / values.len() as f64
-}
-
-fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
+/// Walk `node` to a leaf for feature vector `x`.
+///
+/// # Errors
+///
+/// Returns [`Error::Model`] when a branch indexes a feature past `x`.
+pub fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
     match node {
         Node::Leaf { value } => Ok(*value),
         Node::Branch {
@@ -324,138 +196,5 @@ fn eval_tree(node: &Node, x: &[f64]) -> Result<f64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn row4(first: f64) -> Vec<f64> {
-        let mut v = vec![0.0; 28]; // empty-naics schema dim = 4 + 24 UNK
-        if let Some(slot) = v.get_mut(0) {
-            *slot = first;
-        }
-        v
-    }
-
-    /// Minimal single-leaf model text for rejection fixtures.
-    fn leaf_model_text(header: &str, dim: usize, n_trees: usize, trees: &str) -> String {
-        format!("{header}\nbase 0\nlr 0.1\ndim {dim}\nnaics\ntrees {n_trees}\n{trees}\n")
-    }
-
-    #[test]
-    fn learns_simple_preference_direction() {
-        let schema = FeatureSchema::new(vec![]);
-        // Difference feature: positive when left is better on first dim.
-        let xs = vec![row4(2.0), row4(1.0), row4(-2.0), row4(-1.0)];
-        let ys = vec![1.0, 1.0, -1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        assert!(model.predict_raw(xs.first().unwrap()).unwrap() > 0.0);
-        assert!(model.predict_raw(xs.get(2).unwrap()).unwrap() < 0.0);
-        let text = model.to_string_format();
-        let loaded = GbdtModel::from_string_format(&text).unwrap();
-        assert!(
-            (loaded.predict_raw(xs.first().unwrap()).unwrap()
-                - model.predict_raw(xs.first().unwrap()).unwrap())
-            .abs()
-                < 1e-9
-        );
-    }
-
-    fn assert_model_err(text: &str) {
-        let err = GbdtModel::from_string_format(text).unwrap_err();
-        assert!(matches!(err, Error::Model(_)));
-    }
-
-    #[test]
-    fn load_rejects_dim_mismatch_with_schema() {
-        // Empty naics ⇒ schema.dim() == 4 + 24 (UNK); claim dim 99.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 99, 1, "L 0"));
-    }
-
-    #[test]
-    fn load_rejects_out_of_range_feature_index() {
-        // Empty naics ⇒ dim 28; branch splits on feature 40.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, "B 40 0 L 1 L -1"));
-    }
-
-    #[test]
-    fn predict_raw_rejects_wrong_width() {
-        let schema = FeatureSchema::new(vec![]);
-        let xs = vec![row4(1.0), row4(-1.0)];
-        let ys = vec![1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        let err = model.predict_raw(&[1.0, 0.0]).unwrap_err();
-        assert!(matches!(err, Error::InvalidInput(_)));
-    }
-
-    #[test]
-    fn load_rejects_too_many_trees() {
-        // MAX_TREES is 256.
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 257, "L 0"));
-    }
-
-    #[test]
-    fn load_rejects_excessive_tree_depth() {
-        let mut tree = String::new();
-        for _ in 0..=MAX_TREE_DEPTH {
-            tree.push_str("B 0 0 ");
-        }
-        tree.push_str("L 0");
-        for _ in 0..=MAX_TREE_DEPTH {
-            tree.push_str(" L 0");
-        }
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 1, &tree));
-    }
-
-    #[test]
-    fn load_rejects_oversized_model_text() {
-        let mut text = leaf_model_text("VA_GBDT 1", 28, 1, "L 0");
-        text.push_str(&"x".repeat(MAX_MODEL_BYTES));
-        assert_model_err(&text);
-    }
-
-    #[test]
-    fn train_rejects_excessive_n_trees() {
-        let schema = FeatureSchema::new(vec![]);
-        let xs = vec![row4(1.0), row4(-1.0)];
-        let ys = vec![1.0, -1.0];
-        let config = TrainConfig {
-            n_trees: MAX_TREES + 1,
-            ..TrainConfig::default()
-        };
-        let err = GbdtModel::train(schema, &xs, &ys, &config).unwrap_err();
-        assert!(matches!(err, Error::InvalidInput(_)));
-    }
-
-    #[test]
-    fn load_rejects_wrong_header() {
-        assert_model_err(&leaf_model_text("VA_GBDT 2", 28, 1, "L 0"));
-    }
-
-    #[test]
-    fn load_rejects_truncated_tree_lines() {
-        assert_model_err(&leaf_model_text("VA_GBDT 1", 28, 2, "L 0"));
-    }
-
-    #[test]
-    fn save_load_filesystem_round_trip() {
-        let schema = FeatureSchema::new(vec![]);
-        let xs = vec![row4(2.0), row4(-2.0)];
-        let ys = vec![1.0, -1.0];
-        let model = GbdtModel::train(schema, &xs, &ys, &TrainConfig::default()).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "visit-attribution-model-{}-{}.va",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
-        model.save(&path).unwrap();
-        let loaded = GbdtModel::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            (loaded.predict_raw(xs.first().unwrap()).unwrap()
-                - model.predict_raw(xs.first().unwrap()).unwrap())
-            .abs()
-                < 1e-9
-        );
-    }
-}
+#[allow(clippy::cognitive_complexity)]
+mod tests;

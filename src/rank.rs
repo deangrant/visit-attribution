@@ -11,8 +11,7 @@ use crate::types::{Cluster, Place, PlaceId, Visit};
 ///
 /// - Empty `candidates` returns [`Error::InvalidInput`].
 /// - A singleton candidate list returns that place with `wins = 0`.
-/// - Ties must resolve deterministically; [`GbdtRanker`] prefers the highest
-///   win count, then the lowest [`PlaceId`].
+/// - Ties must resolve with a deterministic tie-break documented on the impl.
 pub trait Ranker {
     /// Rank candidates and return the winning place id with win count.
     ///
@@ -23,6 +22,8 @@ pub trait Ranker {
 }
 
 /// Learning-to-rank model using pairwise GBDT scores and a win scorecard.
+///
+/// Ties prefer the highest win count, then the lowest [`PlaceId`].
 #[derive(Debug, Clone)]
 pub struct GbdtRanker {
     model: GbdtModel,
@@ -31,7 +32,7 @@ pub struct GbdtRanker {
 impl GbdtRanker {
     /// Wrap a trained model.
     #[must_use]
-    pub fn new(model: GbdtModel) -> Self {
+    pub const fn new(model: GbdtModel) -> Self {
         Self { model }
     }
 
@@ -46,20 +47,8 @@ impl GbdtRanker {
                 "need at least one labeled example".into(),
             ));
         }
-        let mut places = Vec::new();
-        for ex in examples {
-            places.extend(ex.candidates.iter().cloned());
-        }
-        let schema = FeatureSchema::from_places(&places, config.max_naics4);
-        let mut xs = Vec::new();
-        let mut ys = Vec::new();
-        for ex in examples {
-            let rows = absolute_features(&schema, &ex.cluster, &ex.candidates);
-            for pair in preference_pairs(&rows, ex.true_place_id) {
-                xs.push(pair.diff);
-                ys.push(pair.label);
-            }
-        }
+        let schema = schema_from_examples(examples, config.max_naics4);
+        let (xs, ys) = preference_xy(examples, &schema);
         if xs.is_empty() {
             return Err(Error::InvalidInput(
                 "no preference pairs; each example needs the true place among >=2 candidates"
@@ -92,7 +81,7 @@ impl GbdtRanker {
 
     /// Borrow the feature schema.
     #[must_use]
-    pub fn schema(&self) -> &FeatureSchema {
+    pub const fn schema(&self) -> &FeatureSchema {
         &self.model.schema
     }
 }
@@ -105,39 +94,62 @@ impl Ranker for GbdtRanker {
             ));
         }
         if candidates.len() == 1 {
-            let Some(only) = candidates.first() else {
-                return Err(Error::InvalidInput(
-                    "cannot rank an empty candidate set".into(),
-                ));
-            };
-            return Ok((only.id, 0));
+            return Ok((candidates[0].id, 0));
         }
         let rows = absolute_features(&self.model.schema, cluster, candidates);
-        let mut wins = vec![0_u32; rows.len()];
-        let mut diff = Vec::with_capacity(self.model.schema.dim());
-        for (i, left) in rows.iter().enumerate() {
-            for (offset, right) in rows.iter().enumerate().skip(i + 1) {
-                let j = offset;
-                diff.clear();
-                diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
-                let score = self.model.predict_raw(&diff)?;
-                if score >= 0.0 {
-                    if let Some(w) = wins.get_mut(i) {
-                        *w += 1;
-                    }
-                } else if let Some(w) = wins.get_mut(j) {
-                    *w += 1;
-                }
-            }
-        }
-        let (best_id, best_wins) = rows
-            .iter()
-            .zip(wins.iter())
-            .max_by(|(a, aw), (b, bw)| aw.cmp(bw).then_with(|| b.0.cmp(&a.0)))
-            .map(|((id, _), &w)| (*id, w))
-            .ok_or_else(|| Error::InvalidInput("cannot rank an empty candidate set".into()))?;
-        Ok((best_id, best_wins))
+        let wins = pairwise_wins(&self.model, &rows)?;
+        pick_winner_by_wins(&rows, &wins)
     }
+}
+
+fn schema_from_examples(examples: &[LabeledExample], max_naics4: usize) -> FeatureSchema {
+    let mut places = Vec::new();
+    for ex in examples {
+        places.extend(ex.candidates.iter().cloned());
+    }
+    FeatureSchema::from_places(&places, max_naics4)
+}
+
+fn preference_xy(examples: &[LabeledExample], schema: &FeatureSchema) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    for ex in examples {
+        let rows = absolute_features(schema, &ex.cluster, &ex.candidates);
+        for pair in preference_pairs(&rows, ex.true_place_id) {
+            xs.push(pair.diff);
+            ys.push(pair.label);
+        }
+    }
+    (xs, ys)
+}
+
+fn apply_pair_win(wins: &mut [u32], i: usize, j: usize, score: f64) {
+    let idx = if score >= 0.0 { i } else { j };
+    if let Some(w) = wins.get_mut(idx) {
+        *w += 1;
+    }
+}
+
+fn pairwise_wins(model: &GbdtModel, rows: &[(PlaceId, Vec<f64>)]) -> Result<Vec<u32>> {
+    let mut wins = vec![0_u32; rows.len()];
+    let mut diff = Vec::with_capacity(model.schema.dim());
+    for (i, left) in rows.iter().enumerate() {
+        for (j, right) in rows.iter().enumerate().skip(i + 1) {
+            diff.clear();
+            diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
+            let score = model.predict_raw(&diff)?;
+            apply_pair_win(&mut wins, i, j, score);
+        }
+    }
+    Ok(wins)
+}
+
+fn pick_winner_by_wins(rows: &[(PlaceId, Vec<f64>)], wins: &[u32]) -> Result<(PlaceId, u32)> {
+    rows.iter()
+        .zip(wins.iter())
+        .max_by(|(a, aw), (b, bw)| aw.cmp(bw).then_with(|| b.0.cmp(&a.0)))
+        .map(|((id, _), &w)| (*id, w))
+        .ok_or_else(|| Error::InvalidInput("cannot rank an empty candidate set".into()))
 }
 
 /// Attach a ranked place to a cluster, producing a [`Visit`].
@@ -158,6 +170,7 @@ pub fn visit_from_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Result;
     use crate::types::GpsPing;
 
     fn square(id: PlaceId, lat: f64, lon: f64, naics: u32) -> Place {
@@ -165,27 +178,27 @@ mod tests {
     }
 
     #[test]
-    fn trains_and_picks_closer_place() {
+    fn trains_and_picks_closer_place() -> Result<()> {
         let near = square(1, 0.0, 0.0, 445_110);
         let far = square(2, 0.05, 0.05, 445_110);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ])
-        .unwrap();
+        ])?;
         let examples = vec![LabeledExample {
             cluster: cluster.clone(),
             candidates: vec![near.clone(), far.clone()],
             true_place_id: 1,
         }];
-        let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
-        let (id, _) = ranker.rank(&cluster, &[near, far]).unwrap();
+        let ranker = GbdtRanker::train(&examples, &TrainConfig::default())?;
+        let (id, _) = ranker.rank(&cluster, &[near, far])?;
         assert_eq!(id, 1);
+        Ok(())
     }
 
     #[test]
-    fn ranks_many_candidates_with_index_scorecard() {
+    fn ranks_many_candidates_with_index_scorecard() -> Result<()> {
         let near = square(1, 0.0, 0.0, 445_110);
         let mid = square(3, 0.02, 0.02, 445_110);
         let far = square(5, 0.05, 0.05, 445_110);
@@ -195,27 +208,21 @@ mod tests {
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
             GpsPing::new(0.0006, 0.0004, 40.0, 5.0),
-        ])
-        .unwrap();
-        let candidates = vec![
-            near.clone(),
-            mid.clone(),
-            far.clone(),
-            farther.clone(),
-            farthest.clone(),
-        ];
+        ])?;
+        let candidates = vec![near, mid, far, farther, farthest];
         let examples = vec![LabeledExample {
             cluster: cluster.clone(),
             candidates: candidates.clone(),
             true_place_id: 1,
         }];
-        let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
-        let (id, wins) = ranker.rank(&cluster, &candidates).unwrap();
+        let ranker = GbdtRanker::train(&examples, &TrainConfig::default())?;
+        let (id, wins) = ranker.rank(&cluster, &candidates)?;
         assert_eq!(id, 1);
         assert!(wins >= 1);
+        Ok(())
     }
 
-    fn zero_score_ranker() -> GbdtRanker {
+    fn zero_score_ranker() -> Result<GbdtRanker> {
         let text = "\
 VA_GBDT 1
 base 0
@@ -232,75 +239,139 @@ L 0
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        std::fs::write(&path, text).unwrap();
-        let model = GbdtModel::load(&path).unwrap();
+        std::fs::write(&path, text)?;
+        let model = GbdtModel::load(&path)?;
         let _ = std::fs::remove_file(&path);
-        GbdtRanker::new(model)
+        Ok(GbdtRanker::new(model))
     }
 
-    fn cluster_near_origin() -> Cluster {
+    fn cluster_near_origin() -> Result<Cluster> {
         Cluster::from_pings(vec![
             GpsPing::new(0.0004, 0.0004, 0.0, 5.0),
             GpsPing::new(0.0005, 0.0005, 20.0, 5.0),
         ])
-        .unwrap()
     }
 
     #[test]
-    fn empty_candidates_returns_invalid_input() {
-        let ranker = zero_score_ranker();
-        let err = ranker.rank(&cluster_near_origin(), &[]).unwrap_err();
+    fn empty_candidates_returns_invalid_input() -> Result<()> {
+        let ranker = zero_score_ranker()?;
+        let err = crate::test_util::err(ranker.rank(&cluster_near_origin()?, &[]))?;
         assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
     }
 
     #[test]
-    fn singleton_candidate_has_zero_wins() {
-        let (id, wins) = zero_score_ranker()
-            .rank(&cluster_near_origin(), &[square(9, 0.0, 0.0, 445_110)])
-            .unwrap();
+    fn singleton_candidate_has_zero_wins() -> Result<()> {
+        let (id, wins) =
+            zero_score_ranker()?.rank(&cluster_near_origin()?, &[square(9, 0.0, 0.0, 445_110)])?;
         assert_eq!((id, wins), (9, 0));
+        Ok(())
     }
 
     #[test]
-    fn win_count_tie_prefers_lowest_place_id() {
-        // Through the ranker, a constant-zero scorer awards each pair to the
-        // lower index (score >= 0). With equal geometry, the first list entry
-        // uniquely leads — PlaceId only decides when win counts match.
-        let ranker = zero_score_ranker();
+    fn win_count_tie_prefers_lowest_place_id() -> Result<()> {
+        // A constant-zero scorer awards each pair to the lower index
+        // (score >= 0). With equal geometry the first list entry uniquely
+        // leads. PlaceId only decides when win counts match.
+        let ranker = zero_score_ranker()?;
         let a = square(5, 0.0, 0.0, 445_110);
         let b = square(2, 0.0, 0.0, 445_110);
-        let (id, _) = ranker.rank(&cluster_near_origin(), &[a.clone(), b.clone()]).unwrap();
+        let (id, _) = ranker.rank(&cluster_near_origin()?, &[a.clone(), b.clone()])?;
         assert_eq!(id, 5);
-        let (id_rev, _) = ranker.rank(&cluster_near_origin(), &[b, a]).unwrap();
+        let (id_rev, _) = ranker.rank(&cluster_near_origin()?, &[b, a])?;
         assert_eq!(id_rev, 2);
+        Ok(())
     }
 
     #[test]
-    fn duplicate_place_ids_are_accepted() {
+    fn duplicate_place_ids_are_accepted() -> Result<()> {
         // Duplicates are not rejected; both rows compete in the tournament.
         let place = square(3, 0.0, 0.0, 445_110);
-        let (id, wins) = zero_score_ranker()
-            .rank(&cluster_near_origin(), &[place.clone(), place])
-            .unwrap();
+        let (id, wins) =
+            zero_score_ranker()?.rank(&cluster_near_origin()?, &[place.clone(), place])?;
         assert_eq!((id, wins), (3, 1));
+        Ok(())
     }
 
     #[test]
-    fn ranks_unseen_naics_via_unk_hour_block() {
+    fn ranks_unseen_naics_via_unk_hour_block() -> Result<()> {
         let known = square(1, 0.0, 0.0, 445_110);
         let distractor = square(2, 0.05, 0.05, 445_110);
-        let cluster = cluster_near_origin();
+        let cluster = cluster_near_origin()?;
         let examples = vec![LabeledExample {
             cluster: cluster.clone(),
-            candidates: vec![known.clone(), distractor],
+            candidates: vec![known, distractor],
             true_place_id: 1,
         }];
-        let ranker = GbdtRanker::train(&examples, &TrainConfig::default()).unwrap();
+        let ranker = GbdtRanker::train(&examples, &TrainConfig::default())?;
         assert!(ranker.schema().naics4.contains(&4_451));
         // Serve-time NAICS outside the frozen schema maps to the UNK hour block.
         let unseen = square(1, 0.0, 0.0, 722_515);
         let other = square(2, 0.05, 0.05, 722_515);
-        let (id, _) = ranker.rank(&cluster, &[unseen, other]).unwrap();
+        let (id, _) = ranker.rank(&cluster, &[unseen, other])?;
         assert_eq!(id, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn train_rejects_empty_examples_and_lonely_true_place() -> Result<()> {
+        let err = crate::test_util::err(GbdtRanker::train(&[], &TrainConfig::default()))?;
+        assert!(matches!(err, Error::InvalidInput(_)));
+        let cluster = cluster_near_origin()?;
+        let only = square(1, 0.0, 0.0, 445_110);
+        let err = crate::test_util::err(GbdtRanker::train(
+            &[LabeledExample {
+                cluster,
+                candidates: vec![only],
+                true_place_id: 1,
+            }],
+            &TrainConfig::default(),
+        ))?;
+        assert!(matches!(err, Error::InvalidInput(_)));
+        Ok(())
+    }
+
+    fn temp_va(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "visit-attribution-{prefix}-{}-{}.va",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ))
+    }
+
+    #[test]
+    fn save_load_round_trip() -> Result<()> {
+        let ranker = zero_score_ranker()?;
+        let path = temp_va("ranker");
+        ranker.save(&path)?;
+        let loaded = GbdtRanker::load(&path)?;
+        let _ = std::fs::remove_file(&path);
+        let (id, wins) = loaded.rank(&cluster_near_origin()?, &[square(9, 0.0, 0.0, 445_110)])?;
+        assert_eq!((id, wins), (9, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn negative_pairwise_score_awards_the_later_index() -> Result<()> {
+        let neg_text = "\
+VA_GBDT 1
+base 0
+lr 1
+dim 28
+naics
+trees 1
+L -1
+";
+        let neg_path = temp_va("neg");
+        std::fs::write(&neg_path, neg_text)?;
+        let neg = GbdtRanker::load(&neg_path)?;
+        let _ = std::fs::remove_file(&neg_path);
+        let a = square(1, 0.0, 0.0, 445_110);
+        let b = square(2, 0.0, 0.0, 445_110);
+        let (id, wins) = neg.rank(&cluster_near_origin()?, &[a, b])?;
+        assert_eq!((id, wins), (2, 1));
+        Ok(())
     }
 }

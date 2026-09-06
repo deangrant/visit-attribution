@@ -18,7 +18,7 @@ pub trait PingCleaner {
 }
 
 /// Default cleaner matching the pipeline's pre-processing rules.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct DefaultPingCleaner {
     config: Config,
 }
@@ -26,7 +26,7 @@ pub struct DefaultPingCleaner {
 impl DefaultPingCleaner {
     /// Create a cleaner from validated configuration.
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 }
@@ -64,6 +64,12 @@ fn take_masked(pings: &[GpsPing], keep: &[bool]) -> Vec<GpsPing> {
         .collect()
 }
 
+fn clear_keep(keep: &mut [bool], i: usize) {
+    if let Some(flag) = keep.get_mut(i) {
+        *flag = false;
+    }
+}
+
 fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
     if pings.is_empty() {
         return Vec::new();
@@ -71,22 +77,16 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
     let mut keep = vec![true; pings.len()];
     let mut last_kept = 0usize;
     for (i, ping) in pings.iter().enumerate().skip(1) {
-        let Some(prev) = pings.get(last_kept) else {
-            break;
-        };
+        let prev = pings[last_kept];
         let dt = ping.time_s - prev.time_s;
         if dt <= 0.0 {
-            if let Some(flag) = keep.get_mut(i) {
-                *flag = false;
-            }
+            clear_keep(&mut keep, i);
             continue;
         }
         let dist = haversine_m(prev.point, ping.point);
         if dist / dt > max_speed_m_s {
             // Drop the later ping of an impossible jump from the last kept.
-            if let Some(flag) = keep.get_mut(i) {
-                *flag = false;
-            }
+            clear_keep(&mut keep, i);
         } else {
             last_kept = i;
         }
@@ -96,11 +96,8 @@ fn filter_jumpy(pings: &[GpsPing], max_speed_m_s: f64) -> Vec<GpsPing> {
 
 fn window_path_m(window: &[GpsPing]) -> f64 {
     let mut path = 0.0;
-    for hop in window.windows(2) {
-        let [a, b] = hop else {
-            continue;
-        };
-        path += haversine_m(a.point, b.point);
+    for i in 1..window.len() {
+        path += haversine_m(window[i - 1].point, window[i].point);
     }
     path
 }
@@ -112,21 +109,43 @@ fn mark_fast_arrivals(
     driving_speed_m_s: f64,
     drop: &mut [bool],
 ) {
-    for abs_idx in left..right {
-        let Some(hop) = pings.get(abs_idx..=abs_idx + 1) else {
-            continue;
-        };
-        let [a, b] = hop else {
-            continue;
-        };
+    let last = pings.len().saturating_sub(1);
+    for abs_idx in left..right.min(last) {
+        let a = pings[abs_idx];
+        let b = pings[abs_idx + 1];
         let hop_dt = (b.time_s - a.time_s).max(1e-6);
         let hop_m = haversine_m(a.point, b.point);
         if hop_m / hop_dt >= driving_speed_m_s {
-            if let Some(flag) = drop.get_mut(abs_idx + 1) {
-                *flag = true;
-            }
+            drop[abs_idx + 1] = true;
         }
     }
+}
+
+fn advance_window_left(pings: &[GpsPing], left: &mut usize, right: usize, window_s: f64) {
+    if right >= pings.len() {
+        return;
+    }
+    let right_ping = pings[right];
+    while *left < right {
+        if right_ping.time_s - pings[*left].time_s <= window_s {
+            break;
+        }
+        *left += 1;
+    }
+}
+
+fn window_is_driving(window: &[GpsPing], linearity_threshold: f64, driving_speed_m_s: f64) -> bool {
+    let path = window_path_m(window);
+    let (Some(first), Some(last)) = (window.first(), window.last()) else {
+        return false;
+    };
+    let net = haversine_m(first.point, last.point);
+    if net < 1.0 {
+        return false;
+    }
+    let linearity = path / net;
+    let speed = path / (last.time_s - first.time_s).max(1e-6);
+    linearity <= linearity_threshold && speed >= driving_speed_m_s
 }
 
 fn filter_driving(
@@ -141,35 +160,12 @@ fn filter_driving(
     let mut drop = vec![false; pings.len()];
     let mut left = 0usize;
     for right in 0..pings.len() {
-        let Some(right_ping) = pings.get(right) else {
-            break;
-        };
-        while left < right {
-            let Some(left_ping) = pings.get(left) else {
-                break;
-            };
-            if right_ping.time_s - left_ping.time_s <= window_s {
-                break;
-            }
-            left += 1;
-        }
+        advance_window_left(pings, &mut left, right, window_s);
         if right - left + 1 < 3 {
             continue;
         }
-        let Some(window) = pings.get(left..=right) else {
-            continue;
-        };
-        let path = window_path_m(window);
-        let (Some(first), Some(last)) = (window.first(), window.last()) else {
-            continue;
-        };
-        let net = haversine_m(first.point, last.point);
-        if net < 1.0 {
-            continue;
-        }
-        let linearity = path / net;
-        let speed = path / (last.time_s - first.time_s).max(1e-6);
-        if linearity <= linearity_threshold && speed >= driving_speed_m_s {
+        let window = &pings[left..=right];
+        if window_is_driving(window, linearity_threshold, driving_speed_m_s) {
             // Drop only arrivals on fast hops so dwell edges in the window survive.
             mark_fast_arrivals(pings, left, right, driving_speed_m_s, &mut drop);
         }
@@ -179,6 +175,7 @@ fn filter_driving(
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 
@@ -238,8 +235,7 @@ mod tests {
             GpsPing::new(0.03, 0.0, 50.0, 10.0),
         ];
         let out = clean_default(&pings);
-        let dwell: Vec<_> = out.iter().filter(|p| p.time_s <= 20.0).collect();
-        assert_eq!(dwell.len(), 3);
+        assert_eq!(out.iter().filter(|p| p.time_s <= 20.0).count(), 3);
         assert!(out.len() < pings.len());
     }
 
@@ -262,16 +258,77 @@ mod tests {
     #[test]
     fn drops_equal_timestamps() {
         // Cleaning sorts by time first; equal times yield dt <= 0 vs last kept.
+        // Equal timestamps yield dt <= 0 versus the last kept ping.
         let out = clean_default(&[
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
-            GpsPing::new(0.00001, 0.0, 0.0, 10.0), // equal time → drop
+            GpsPing::new(0.00001, 0.0, 0.0, 10.0),
             GpsPing::new(0.00002, 0.0, 10.0, 10.0),
-            GpsPing::new(0.00003, 0.0, 10.0, 10.0), // equal to last kept → drop
+            GpsPing::new(0.00003, 0.0, 10.0, 10.0),
             GpsPing::new(0.00004, 0.0, 20.0, 10.0),
         ]);
         assert_eq!(out.len(), 3);
         assert!((out[0].time_s - 0.0).abs() < f64::EPSILON);
         assert!((out[1].time_s - 10.0).abs() < f64::EPSILON);
         assert!((out[2].time_s - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn jumpy_filter_empty_and_short_inputs() {
+        assert!(filter_jumpy(&[], 50.0).is_empty());
+        let one = [GpsPing::new(0.0, 0.0, 0.0, 10.0)];
+        assert_eq!(filter_jumpy(&one, 50.0).len(), 1);
+        assert_eq!(filter_driving(&one, 1.15, 60.0, 8.0).len(), 1);
+    }
+
+    #[test]
+    fn driving_filter_drops_fast_linear_arrivals() {
+        // ~33 m hops / 3 s ≈ 11 m/s: above driving_speed, below max_speed.
+        let pings = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0003, 0.0, 3.0, 10.0),
+            GpsPing::new(0.0006, 0.0, 6.0, 10.0),
+            GpsPing::new(0.0009, 0.0, 9.0, 10.0),
+        ];
+        let cfg = Config::default();
+        let out = filter_driving(
+            &pings,
+            cfg.linearity_threshold,
+            cfg.linearity_window_s,
+            cfg.driving_speed_m_s,
+        );
+        assert_eq!(out.first().map(|p| p.time_s), Some(0.0));
+        assert!(out.len() < pings.len());
+    }
+
+    #[test]
+    fn driving_helpers_cover_empty_window_and_advances() {
+        let dwell = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0, 0.0, 10.0, 10.0),
+            GpsPing::new(0.0, 0.0, 20.0, 10.0),
+        ];
+        assert_eq!(filter_driving(&dwell, 1.15, 60.0, 8.0).len(), 3);
+        assert!(!window_is_driving(&[], 1.15, 8.0));
+        let mut drop = [false, false];
+        mark_fast_arrivals(
+            &[
+                GpsPing::new(0.0, 0.0, 0.0, 10.0),
+                GpsPing::new(0.0, 0.0, 10.0, 10.0),
+            ],
+            0,
+            1,
+            8.0,
+            &mut drop,
+        );
+        assert!(!drop[1]);
+        let mut left = 0usize;
+        advance_window_left(&[], &mut left, 0, 60.0);
+        assert_eq!(left, 0);
+        let span = [
+            GpsPing::new(0.0, 0.0, 0.0, 10.0),
+            GpsPing::new(0.0, 0.0, 100.0, 10.0),
+        ];
+        advance_window_left(&span, &mut left, 1, 60.0);
+        assert_eq!(left, 1);
     }
 }

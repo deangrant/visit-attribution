@@ -12,7 +12,10 @@ pub fn haversine_m(a: Point, b: Point) -> f64 {
     let lat2 = b.lat.to_radians();
     let dlat = (b.lat - a.lat).to_radians();
     let dlon = (b.lon - a.lon).to_radians();
-    let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let h = (dlat / 2.0).sin().mul_add(
+        (dlat / 2.0).sin(),
+        lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2),
+    );
     2.0 * EARTH_RADIUS_M * h.sqrt().asin()
 }
 
@@ -26,20 +29,19 @@ pub fn meters_to_degrees(lat: f64, meters: f64) -> (f64, f64) {
 }
 
 fn ensure_closed(ring: &[Point]) -> Vec<Point> {
-    if ring.is_empty() {
+    let Some(&first) = ring.first() else {
         return Vec::new();
-    }
+    };
     let mut out = ring.to_vec();
-    let Some(&first) = out.first() else {
-        return out;
-    };
-    let Some(&last) = out.last() else {
-        return out;
-    };
+    let last = out[out.len() - 1];
     if (first.lat - last.lat).abs() > f64::EPSILON || (first.lon - last.lon).abs() > f64::EPSILON {
         out.push(first);
     }
     out
+}
+
+fn consecutive_pairs(ring: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    (1..ring.len()).map(|i| (ring[i - 1], ring[i]))
 }
 
 /// Point-in-polygon test for an exterior ring (holes unsupported).
@@ -56,20 +58,20 @@ pub fn point_in_polygon(point: Point, ring: &[Point]) -> bool {
         return true;
     }
     let mut inside = false;
-    for window in ring.windows(2) {
-        let [pi, pj] = window else {
-            continue;
-        };
-        if (pi.lat - pj.lat).abs() < f64::EPSILON {
-            continue;
-        }
-        let intersect = ((pi.lat > point.lat) != (pj.lat > point.lat))
-            && (point.lon < (pj.lon - pi.lon) * (point.lat - pi.lat) / (pj.lat - pi.lat) + pi.lon);
-        if intersect {
+    for (pi, pj) in consecutive_pairs(&ring) {
+        if ray_hits_edge(point, pi, pj) {
             inside = !inside;
         }
     }
     inside
+}
+
+fn ray_hits_edge(point: Point, pi: Point, pj: Point) -> bool {
+    if (pi.lat - pj.lat).abs() < f64::EPSILON {
+        return false;
+    }
+    ((pi.lat > point.lat) != (pj.lat > point.lat))
+        && (point.lon < (pj.lon - pi.lon) * (point.lat - pi.lat) / (pj.lat - pi.lat) + pi.lon)
 }
 
 /// Absolute epsilon in degrees for on-edge collinearity / bbox padding.
@@ -85,17 +87,12 @@ fn point_on_segment(p: Point, a: Point, b: Point) -> bool {
     }
     let dlon = b.lon - a.lon;
     let dlat = b.lat - a.lat;
-    let cross = dlon * (p.lat - a.lat) - dlat * (p.lon - a.lon);
+    let cross = dlon.mul_add(p.lat - a.lat, -(dlat * (p.lon - a.lon)));
     cross.abs() <= ON_EDGE_DEG_EPS * (1.0 + dlon.abs() + dlat.abs())
 }
 
 fn point_on_ring_edge(point: Point, ring: &[Point]) -> bool {
-    ring.windows(2).any(|window| {
-        let [a, b] = window else {
-            return false;
-        };
-        point_on_segment(point, *a, *b)
-    })
+    consecutive_pairs(ring).any(|(a, b)| point_on_segment(point, a, b))
 }
 
 fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
@@ -111,17 +108,17 @@ fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
     let aby = by - ay;
     let apx = px - ax;
     let apy = py - ay;
-    let ab2 = abx * abx + aby * aby;
+    let ab2 = abx.mul_add(abx, aby * aby);
     let t = if ab2 < 1e-18 {
         0.0
     } else {
-        ((apx * abx + apy * aby) / ab2).clamp(0.0, 1.0)
+        (apx.mul_add(abx, apy * aby) / ab2).clamp(0.0, 1.0)
     };
     let cx = ax + t * abx;
     let cy = ay + t * aby;
     let dx = px - cx;
     let dy = py - cy;
-    (dx * dx + dy * dy).sqrt()
+    dx.hypot(dy)
 }
 
 /// Distance in meters from a point to the nearest location on a polygon.
@@ -137,11 +134,8 @@ pub fn distance_to_polygon_m(point: Point, ring: &[Point]) -> f64 {
         return f64::INFINITY;
     }
     let mut best = f64::INFINITY;
-    for window in ring.windows(2) {
-        let [a, b] = window else {
-            continue;
-        };
-        best = best.min(dist_point_segment_m(point, *a, *b));
+    for (a, b) in consecutive_pairs(&ring) {
+        best = best.min(dist_point_segment_m(point, a, b));
     }
     best
 }
@@ -154,18 +148,15 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
         return 0.0;
     }
     // Spherical excess approximation via equirectangular shoe-lace at mean lat.
-    let mean_lat = ring.iter().map(|p| p.lat).sum::<f64>() / (ring.len() as f64);
+    let mean_lat = ring.iter().map(|p| p.lat).sum::<f64>() / crate::types::len_f64(ring.len());
     let (mx, my) = meters_to_degrees(mean_lat, 1.0);
     let mut area = 0.0;
-    for window in ring.windows(2) {
-        let [p1, p2] = window else {
-            continue;
-        };
+    for (p1, p2) in consecutive_pairs(&ring) {
         let x1 = p1.lon / my;
         let y1 = p1.lat / mx;
         let x2 = p2.lon / my;
         let y2 = p2.lat / mx;
-        area += x1 * y2 - x2 * y1;
+        area += x1.mul_add(y2, -(x2 * y1));
     }
     area.abs() * 0.5
 }
@@ -173,9 +164,13 @@ pub fn ring_area_m2(ring: &[Point]) -> f64 {
 /// Axis-aligned bounding box in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BBox {
+    /// Southern edge in degrees.
     pub min_lat: f64,
+    /// Northern edge in degrees.
     pub max_lat: f64,
+    /// Western edge in degrees.
     pub min_lon: f64,
+    /// Eastern edge in degrees.
     pub max_lon: f64,
 }
 
@@ -196,8 +191,8 @@ impl BBox {
             min_lon = min_lon.min(p.lon);
             max_lon = max_lon.max(p.lon);
         }
-        let mid_lat = (min_lat + max_lat) * 0.5;
-        let (dlat, dlon) = meters_to_degrees(mid_lat, pad_m);
+        let center_lat = (min_lat + max_lat) * 0.5;
+        let (dlat, dlon) = meters_to_degrees(center_lat, pad_m);
         Some(Self {
             min_lat: min_lat - dlat,
             max_lat: max_lat + dlat,
@@ -228,6 +223,7 @@ impl BBox {
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 
@@ -257,12 +253,12 @@ mod tests {
     #[test]
     fn point_on_boundary_counts_as_inside() {
         let ring = unit_square();
-        // Mid-edges (Point is lat, lon).
-        assert!(point_in_polygon(Point::new(0.0005, 0.0), &ring)); // west
-        assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring)); // east
-        assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring)); // south
-        assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring)); // north
-                                                                     // Vertices.
+        // Mid-edges use Point as (lat, lon).
+        assert!(point_in_polygon(Point::new(0.0005, 0.0), &ring));
+        assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring));
+        assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring));
+        assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring));
+        // Vertices count as inside.
         assert!(point_in_polygon(Point::new(0.0, 0.0), &ring));
         assert!(point_in_polygon(Point::new(0.001, 0.001), &ring));
         assert!((distance_to_polygon_m(Point::new(0.0005, 0.0), &ring)).abs() < 1e-9);
@@ -277,5 +273,27 @@ mod tests {
     #[test]
     fn ring_area_positive() {
         assert!(ring_area_m2(&unit_square()) > 0.0);
+    }
+
+    #[test]
+    fn point_in_polygon_rejects_short_rings() {
+        assert!(!point_in_polygon(Point::new(0.0, 0.0), &[]));
+        assert!(!point_in_polygon(
+            Point::new(0.0, 0.0),
+            &[Point::new(0.0, 0.0), Point::new(1.0, 0.0)],
+        ));
+        assert!((ring_area_m2(&[])).abs() < f64::EPSILON);
+        assert!(distance_to_polygon_m(Point::new(0.0, 0.0), &[]).is_infinite());
+        let open = [
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 0.001),
+            Point::new(0.001, 0.001),
+            Point::new(0.001, 0.0),
+        ];
+        assert!(ring_area_m2(&open) > 0.0);
+        let outside = Point::new(-0.01, -0.01);
+        assert!(distance_to_polygon_m(outside, &unit_square()) > 0.0);
+        let a = Point::new(0.0, 0.0);
+        assert!(dist_point_segment_m(Point::new(0.001, 0.0), a, a) > 0.0);
     }
 }

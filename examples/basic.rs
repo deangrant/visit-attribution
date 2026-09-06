@@ -1,10 +1,12 @@
 //! End-to-end example: train a ranker and attribute a short trajectory.
 
+use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, TrainConfig, VisitAttributor,
+    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
+    VisitAttributor,
 };
 
-fn main() {
+fn main() -> Result<()> {
     let cafe = Place::square(1, 51.5000, -0.1200, 0.001, Some(722_515));
     let shop = Place::square(2, 51.5000, -0.1190, 0.001, Some(445_110));
     let pings = vec![
@@ -12,10 +14,10 @@ fn main() {
         GpsPing::new(51.5005, -0.1195, 1_700_000_030.0, 8.0),
         GpsPing::new(51.50045, -0.11955, 1_700_000_060.0, 8.0),
     ];
-    let cluster = Cluster::from_pings(pings.clone()).unwrap();
+    let cluster = Cluster::from_pings(pings.clone())?;
     let ranker = GbdtRanker::train(
         &[LabeledExample {
-            cluster: cluster.clone(),
+            cluster,
             candidates: vec![cafe.clone(), shop.clone()],
             true_place_id: 1,
         }],
@@ -23,24 +25,25 @@ fn main() {
             n_trees: 16,
             ..TrainConfig::default()
         },
-    )
-    .expect("train");
+    )?;
 
     let places = vec![cafe, shop];
     let attributor = VisitAttributor::builder()
-        .config(Config::builder().join_radius_m(120.0).build().expect("config"))
+        .config(Config::builder().join_radius_m(120.0).build()?)
         .ranker(ranker)
-        .build()
-        .expect("build");
-    let visits = attributor.attribute(&pings, &places).expect("attribute").visits;
+        .build()?;
+    let visits = attributor.attribute(&pings, &places)?.visits;
+    let mut out = io::stdout();
     for visit in &visits {
-        println!(
+        writeln!(
+            out,
             "visit place_id={} wins={} duration_s={:.0} candidates={:?}",
             visit.place_id,
             visit.wins,
             visit.cluster.duration_s(),
             visit.candidates
-        );
+        )?;
     }
     assert!(!visits.is_empty());
+    Ok(())
 }

@@ -18,9 +18,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
-            Error::Model(msg) => write!(f, "model error: {msg}"),
-            Error::Io(err) => write!(f, "I/O error: {err}"),
+            Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
+            Self::Model(msg) => write!(f, "model error: {msg}"),
+            Self::Io(err) => write!(f, "I/O error: {err}"),
         }
     }
 }
@@ -28,15 +28,15 @@ impl fmt::Display for Error {
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Error::Io(err) => Some(err),
-            Error::InvalidInput(_) | Error::Model(_) => None,
+            Self::Io(err) => Some(err),
+            Self::InvalidInput(_) | Self::Model(_) => None,
         }
     }
 }
 
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Error::Io(value)
+        Self::Io(value)
     }
 }
 
@@ -44,18 +44,26 @@ impl From<io::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
     use std::io::ErrorKind;
 
     #[test]
-    fn io_variant_preserves_error_kind() {
+    fn io_variant_preserves_error_kind() -> Result<()> {
         let err: Error = io::Error::new(ErrorKind::NotFound, "missing model").into();
-        match &err {
-            Error::Io(inner) => assert_eq!(inner.kind(), ErrorKind::NotFound),
-            other => panic!("expected Io, got {other:?}"),
-        }
+        let Error::Io(inner) = &err else {
+            return Err(Error::InvalidInput("expected Io".into()));
+        };
+        assert_eq!(inner.kind(), ErrorKind::NotFound);
         assert!(err.source().is_some());
         assert!(err.to_string().contains("missing model"));
+        let invalid = Error::InvalidInput("bad".into());
+        assert!(invalid.source().is_none());
+        assert!(invalid.to_string().contains("invalid input"));
+        let model = Error::Model("corrupt".into());
+        assert!(model.source().is_none());
+        assert!(model.to_string().contains("model error"));
+        Ok(())
     }
 }

@@ -9,7 +9,7 @@ const MIN_EXTENT_DEG: f64 = 1e-6;
 
 /// Quadtree over place bounding boxes (indices into a parallel place list).
 #[derive(Debug, Clone)]
-pub(crate) struct BBoxQuadtree {
+pub struct BBoxQuadtree {
     root: Option<QuadNode>,
 }
 
@@ -21,7 +21,7 @@ enum QuadNode {
     },
     Branch {
         bounds: BBox,
-        children: Box<[QuadNode; 4]>,
+        children: Box<[Self; 4]>,
     },
 }
 
@@ -29,19 +29,13 @@ impl BBoxQuadtree {
     /// Build a tree over `bboxes` (one entry per place index).
     #[must_use]
     pub(crate) fn build(bboxes: &[BBox]) -> Self {
-        if bboxes.is_empty() {
+        let Some((first, rest)) = bboxes.split_first() else {
             return Self { root: None };
-        }
-        let mut root_bounds = match bboxes.split_first() {
-            Some((first, rest)) => {
-                let mut bounds = *first;
-                for b in rest {
-                    bounds = bounds.union(*b);
-                }
-                bounds
-            }
-            None => return Self { root: None },
         };
+        let mut root_bounds = *first;
+        for b in rest {
+            root_bounds = root_bounds.union(*b);
+        }
         root_bounds = ensure_extent(root_bounds);
         let mut root = QuadNode::Leaf {
             bounds: root_bounds,
@@ -64,18 +58,18 @@ impl BBoxQuadtree {
 fn ensure_extent(mut b: BBox) -> BBox {
     if b.max_lat - b.min_lat < MIN_EXTENT_DEG {
         let mid = (b.min_lat + b.max_lat) * 0.5;
-        b.min_lat = mid - MIN_EXTENT_DEG * 0.5;
-        b.max_lat = mid + MIN_EXTENT_DEG * 0.5;
+        b.min_lat = MIN_EXTENT_DEG.mul_add(-0.5, mid);
+        b.max_lat = MIN_EXTENT_DEG.mul_add(0.5, mid);
     }
     if b.max_lon - b.min_lon < MIN_EXTENT_DEG {
         let mid = (b.min_lon + b.max_lon) * 0.5;
-        b.min_lon = mid - MIN_EXTENT_DEG * 0.5;
-        b.max_lon = mid + MIN_EXTENT_DEG * 0.5;
+        b.min_lon = MIN_EXTENT_DEG.mul_add(-0.5, mid);
+        b.max_lon = MIN_EXTENT_DEG.mul_add(0.5, mid);
     }
     b
 }
 
-fn bounds_of(node: &QuadNode) -> BBox {
+const fn bounds_of(node: &QuadNode) -> BBox {
     match node {
         QuadNode::Leaf { bounds, .. } | QuadNode::Branch { bounds, .. } => *bounds,
     }
@@ -112,6 +106,21 @@ fn quadrants(b: BBox) -> [BBox; 4] {
     ]
 }
 
+fn promote_leaf(bounds: BBox, indices: Vec<usize>, bboxes: &[BBox], depth: u8) -> QuadNode {
+    let quads = quadrants(bounds);
+    let mut children = quads.map(|bounds| QuadNode::Leaf {
+        bounds,
+        indices: Vec::new(),
+    });
+    for old_idx in indices {
+        insert_into_children(&mut children, old_idx, bboxes, depth);
+    }
+    QuadNode::Branch {
+        bounds,
+        children: Box::new(children),
+    }
+}
+
 fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
     match node {
         QuadNode::Leaf { bounds, indices } => {
@@ -121,18 +130,7 @@ fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
             }
             let bounds = *bounds;
             let old = std::mem::take(indices);
-            let quads = quadrants(bounds);
-            let mut children = quads.map(|bounds| QuadNode::Leaf {
-                bounds,
-                indices: Vec::new(),
-            });
-            for old_idx in old {
-                insert_into_children(&mut children, old_idx, bboxes, depth);
-            }
-            *node = QuadNode::Branch {
-                bounds,
-                children: Box::new(children),
-            };
+            *node = promote_leaf(bounds, old, bboxes, depth);
         }
         QuadNode::Branch { children, .. } => {
             insert_into_children(children, idx, bboxes, depth);
@@ -152,9 +150,7 @@ fn insert_into_children(children: &mut [QuadNode; 4], idx: usize, bboxes: &[BBox
         }
     }
     if !hit {
-        if let Some(first) = children.first_mut() {
-            insert(first, idx, bboxes, depth.saturating_add(1));
-        }
+        insert(&mut children[0], idx, bboxes, depth.saturating_add(1));
     }
 }
 
@@ -169,5 +165,41 @@ fn query_node(node: &QuadNode, query: BBox, out: &mut Vec<usize>) {
                 query_node(child, query, out);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit() -> BBox {
+        BBox {
+            min_lat: 0.0,
+            max_lat: 1.0,
+            min_lon: 0.0,
+            max_lon: 1.0,
+        }
+    }
+
+    #[test]
+    fn empty_tree_and_disjoint_child_insert() {
+        let tree = BBoxQuadtree::build(&[]);
+        let mut hits = Vec::new();
+        tree.query(unit(), &mut hits);
+        assert!(hits.is_empty());
+
+        let quads = quadrants(unit());
+        let mut children = quads.map(|bounds| QuadNode::Leaf {
+            bounds,
+            indices: Vec::new(),
+        });
+        let far = BBox {
+            min_lat: 10.0,
+            max_lat: 11.0,
+            min_lon: 10.0,
+            max_lon: 11.0,
+        };
+        insert_into_children(&mut children, 0, &[far], 0);
+        insert_into_children(&mut children, 9, &[far], 0);
     }
 }
