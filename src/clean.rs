@@ -175,6 +175,7 @@ fn filter_driving(
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 
@@ -257,11 +258,12 @@ mod tests {
     #[test]
     fn drops_equal_timestamps() {
         // Cleaning sorts by time first; equal times yield dt <= 0 vs last kept.
+        // Equal timestamps yield dt <= 0 versus the last kept ping.
         let out = clean_default(&[
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
-            GpsPing::new(0.00001, 0.0, 0.0, 10.0), // equal time → drop
+            GpsPing::new(0.00001, 0.0, 0.0, 10.0),
             GpsPing::new(0.00002, 0.0, 10.0, 10.0),
-            GpsPing::new(0.00003, 0.0, 10.0, 10.0), // equal to last kept → drop
+            GpsPing::new(0.00003, 0.0, 10.0, 10.0),
             GpsPing::new(0.00004, 0.0, 20.0, 10.0),
         ]);
         assert_eq!(out.len(), 3);
@@ -296,7 +298,10 @@ mod tests {
         );
         assert_eq!(out.first().map(|p| p.time_s), Some(0.0));
         assert!(out.len() < pings.len());
+    }
 
+    #[test]
+    fn driving_helpers_cover_empty_window_and_advances() {
         let dwell = [
             GpsPing::new(0.0, 0.0, 0.0, 10.0),
             GpsPing::new(0.0, 0.0, 10.0, 10.0),

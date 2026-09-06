@@ -5,38 +5,38 @@
 
 use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
-    VisitAttributor,
+    AttributionResult, Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result,
+    TrainConfig, VisitAttributor,
 };
 
-fn main() -> Result<()> {
-    // Catalog: two places far enough apart that each dwell joins only one.
-    let cafe = Place::square(1, 0.0, 0.0, 0.001, Some(722_515));
-    let shop = Place::square(2, 0.05, 0.05, 0.001, Some(445_110));
+fn catalog() -> (Place, Place) {
+    (
+        Place::square(1, 0.0, 0.0, 0.001, Some(722_515)),
+        Place::square(2, 0.05, 0.05, 0.001, Some(445_110)),
+    )
+}
 
-    // Trajectory (seconds from an arbitrary epoch).
-    let pings = vec![
-        // Dwell near the cafe.
+fn trajectory() -> Vec<GpsPing> {
+    vec![
         GpsPing::new(0.0004, 0.0004, 0.0, 8.0),
         GpsPing::new(0.0005, 0.00045, 20.0, 8.0),
         GpsPing::new(0.00045, 0.0005, 40.0, 8.0),
-        // Driving hop (~1.1 km in 10 s) — cleaner should drop arrivals.
         GpsPing::new(0.01, 0.01, 50.0, 8.0),
         GpsPing::new(0.02, 0.02, 60.0, 8.0),
         GpsPing::new(0.03, 0.03, 70.0, 8.0),
-        // Accuracy spike — dropped by max_horizontal_accuracy_m.
         GpsPing::new(0.0504, 0.0504, 80.0, 5_000.0),
-        // Dwell near the shop (after a time gap past the drive).
         GpsPing::new(0.0504, 0.0504, 2_000.0, 8.0),
         GpsPing::new(0.0505, 0.05045, 2_020.0, 8.0),
         GpsPing::new(0.05045, 0.0505, 2_040.0, 8.0),
-        // Orphan dwell far from every place (slow enough to pass jump filter,
-        // far enough to miss join_radius_m) → unmatched_clusters.
+        // Orphan dwell: slow enough to pass the jump filter, far enough to miss
+        // join_radius_m, so it becomes an unmatched cluster.
         GpsPing::new(-0.05, 0.05, 5_000.0, 8.0),
         GpsPing::new(-0.0501, 0.05, 5_020.0, 8.0),
         GpsPing::new(-0.05, 0.0501, 5_040.0, 8.0),
-    ];
+    ]
+}
 
+fn train_ranker(cafe: &Place, shop: &Place) -> Result<GbdtRanker> {
     let cafe_cluster = Cluster::from_pings(vec![
         GpsPing::new(0.0004, 0.0004, 0.0, 8.0),
         GpsPing::new(0.0005, 0.00045, 20.0, 8.0),
@@ -47,8 +47,7 @@ fn main() -> Result<()> {
         GpsPing::new(0.0505, 0.05045, 2_020.0, 8.0),
         GpsPing::new(0.05045, 0.0505, 2_040.0, 8.0),
     ])?;
-
-    let ranker = GbdtRanker::train(
+    GbdtRanker::train(
         &[
             LabeledExample {
                 cluster: cafe_cluster,
@@ -66,16 +65,10 @@ fn main() -> Result<()> {
             max_depth: 3,
             ..TrainConfig::default()
         },
-    )?;
+    )
+}
 
-    let config = Config::builder().join_radius_m(80.0).min_cluster_pings(2).build()?;
-    let places = vec![cafe, shop];
-    let result = VisitAttributor::builder()
-        .config(config)
-        .ranker(ranker)
-        .build()?
-        .attribute(&pings, &places)?;
-
+fn report(result: &AttributionResult) -> Result<()> {
     let mut out = io::stdout();
     writeln!(out, "visits={}", result.visits.len())?;
     for visit in &result.visits {
@@ -102,7 +95,21 @@ fn main() -> Result<()> {
             cluster.pings.len()
         )?;
     }
+    Ok(())
+}
 
+fn main() -> Result<()> {
+    let (cafe, shop) = catalog();
+    let pings = trajectory();
+    let ranker = train_ranker(&cafe, &shop)?;
+    let config = Config::builder().join_radius_m(80.0).min_cluster_pings(2).build()?;
+    let places = vec![cafe, shop];
+    let result = VisitAttributor::builder()
+        .config(config)
+        .ranker(ranker)
+        .build()?
+        .attribute(&pings, &places)?;
+    report(&result)?;
     assert!(
         result.visits.len() >= 2,
         "expected cafe and shop visits, got {}",

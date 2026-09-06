@@ -11,8 +11,7 @@ use crate::types::{Cluster, Place, PlaceId, Visit};
 ///
 /// - Empty `candidates` returns [`Error::InvalidInput`].
 /// - A singleton candidate list returns that place with `wins = 0`.
-/// - Ties must resolve deterministically; [`GbdtRanker`] prefers the highest
-///   win count, then the lowest [`PlaceId`].
+/// - Ties must resolve with a deterministic tie-break documented on the impl.
 pub trait Ranker {
     /// Rank candidates and return the winning place id with win count.
     ///
@@ -23,6 +22,8 @@ pub trait Ranker {
 }
 
 /// Learning-to-rank model using pairwise GBDT scores and a win scorecard.
+///
+/// Ties prefer the highest win count, then the lowest [`PlaceId`].
 #[derive(Debug, Clone)]
 pub struct GbdtRanker {
     model: GbdtModel,
@@ -46,20 +47,8 @@ impl GbdtRanker {
                 "need at least one labeled example".into(),
             ));
         }
-        let mut places = Vec::new();
-        for ex in examples {
-            places.extend(ex.candidates.iter().cloned());
-        }
-        let schema = FeatureSchema::from_places(&places, config.max_naics4);
-        let mut xs = Vec::new();
-        let mut ys = Vec::new();
-        for ex in examples {
-            let rows = absolute_features(&schema, &ex.cluster, &ex.candidates);
-            for pair in preference_pairs(&rows, ex.true_place_id) {
-                xs.push(pair.diff);
-                ys.push(pair.label);
-            }
-        }
+        let schema = schema_from_examples(examples, config.max_naics4);
+        let (xs, ys) = preference_xy(examples, &schema);
         if xs.is_empty() {
             return Err(Error::InvalidInput(
                 "no preference pairs; each example needs the true place among >=2 candidates"
@@ -113,22 +102,43 @@ impl Ranker for GbdtRanker {
     }
 }
 
+fn schema_from_examples(examples: &[LabeledExample], max_naics4: usize) -> FeatureSchema {
+    let mut places = Vec::new();
+    for ex in examples {
+        places.extend(ex.candidates.iter().cloned());
+    }
+    FeatureSchema::from_places(&places, max_naics4)
+}
+
+fn preference_xy(examples: &[LabeledExample], schema: &FeatureSchema) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    for ex in examples {
+        let rows = absolute_features(schema, &ex.cluster, &ex.candidates);
+        for pair in preference_pairs(&rows, ex.true_place_id) {
+            xs.push(pair.diff);
+            ys.push(pair.label);
+        }
+    }
+    (xs, ys)
+}
+
+fn apply_pair_win(wins: &mut [u32], i: usize, j: usize, score: f64) {
+    let idx = if score >= 0.0 { i } else { j };
+    if let Some(w) = wins.get_mut(idx) {
+        *w += 1;
+    }
+}
+
 fn pairwise_wins(model: &GbdtModel, rows: &[(PlaceId, Vec<f64>)]) -> Result<Vec<u32>> {
     let mut wins = vec![0_u32; rows.len()];
     let mut diff = Vec::with_capacity(model.schema.dim());
     for (i, left) in rows.iter().enumerate() {
-        for (offset, right) in rows.iter().enumerate().skip(i + 1) {
-            let j = offset;
+        for (j, right) in rows.iter().enumerate().skip(i + 1) {
             diff.clear();
             diff.extend(left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b));
             let score = model.predict_raw(&diff)?;
-            if score >= 0.0 {
-                if let Some(w) = wins.get_mut(i) {
-                    *w += 1;
-                }
-            } else if let Some(w) = wins.get_mut(j) {
-                *w += 1;
-            }
+            apply_pair_win(&mut wins, i, j, score);
         }
     }
     Ok(wins)
@@ -260,9 +270,9 @@ L 0
 
     #[test]
     fn win_count_tie_prefers_lowest_place_id() -> Result<()> {
-        // Through the ranker, a constant-zero scorer awards each pair to the
-        // lower index (score >= 0). With equal geometry, the first list entry
-        // uniquely leads — PlaceId only decides when win counts match.
+        // A constant-zero scorer awards each pair to the lower index
+        // (score >= 0). With equal geometry the first list entry uniquely
+        // leads. PlaceId only decides when win counts match.
         let ranker = zero_score_ranker()?;
         let a = square(5, 0.0, 0.0, 445_110);
         let b = square(2, 0.0, 0.0, 445_110);
@@ -321,22 +331,30 @@ L 0
         Ok(())
     }
 
-    #[test]
-    fn save_load_round_trip_and_negative_pairwise_score() -> Result<()> {
-        let ranker = zero_score_ranker()?;
-        let path = std::env::temp_dir().join(format!(
-            "visit-attribution-ranker-{}-{}.va",
+    fn temp_va(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "visit-attribution-{prefix}-{}-{}.va",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
-        ));
+        ))
+    }
+
+    #[test]
+    fn save_load_round_trip() -> Result<()> {
+        let ranker = zero_score_ranker()?;
+        let path = temp_va("ranker");
         ranker.save(&path)?;
         let loaded = GbdtRanker::load(&path)?;
         let _ = std::fs::remove_file(&path);
         let (id, wins) = loaded.rank(&cluster_near_origin()?, &[square(9, 0.0, 0.0, 445_110)])?;
         assert_eq!((id, wins), (9, 0));
+        Ok(())
+    }
 
+    #[test]
+    fn negative_pairwise_score_awards_the_later_index() -> Result<()> {
         let neg_text = "\
 VA_GBDT 1
 base 0
@@ -346,13 +364,7 @@ naics
 trees 1
 L -1
 ";
-        let neg_path = std::env::temp_dir().join(format!(
-            "visit-attribution-neg-{}-{}.va",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let neg_path = temp_va("neg");
         std::fs::write(&neg_path, neg_text)?;
         let neg = GbdtRanker::load(&neg_path)?;
         let _ = std::fs::remove_file(&neg_path);

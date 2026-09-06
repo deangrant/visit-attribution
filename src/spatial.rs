@@ -106,6 +106,21 @@ fn quadrants(b: BBox) -> [BBox; 4] {
     ]
 }
 
+fn promote_leaf(bounds: BBox, indices: Vec<usize>, bboxes: &[BBox], depth: u8) -> QuadNode {
+    let quads = quadrants(bounds);
+    let mut children = quads.map(|bounds| QuadNode::Leaf {
+        bounds,
+        indices: Vec::new(),
+    });
+    for old_idx in indices {
+        insert_into_children(&mut children, old_idx, bboxes, depth);
+    }
+    QuadNode::Branch {
+        bounds,
+        children: Box::new(children),
+    }
+}
+
 fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
     match node {
         QuadNode::Leaf { bounds, indices } => {
@@ -115,18 +130,7 @@ fn insert(node: &mut QuadNode, idx: usize, bboxes: &[BBox], depth: u8) {
             }
             let bounds = *bounds;
             let old = std::mem::take(indices);
-            let quads = quadrants(bounds);
-            let mut children = quads.map(|bounds| QuadNode::Leaf {
-                bounds,
-                indices: Vec::new(),
-            });
-            for old_idx in old {
-                insert_into_children(&mut children, old_idx, bboxes, depth);
-            }
-            *node = QuadNode::Branch {
-                bounds,
-                children: Box::new(children),
-            };
+            *node = promote_leaf(bounds, old, bboxes, depth);
         }
         QuadNode::Branch { children, .. } => {
             insert_into_children(children, idx, bboxes, depth);

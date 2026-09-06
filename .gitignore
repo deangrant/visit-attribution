@@ -17,6 +17,9 @@ Cargo.lock
 # Coverage
 lcov.info
 
+# CodeGraph local index
+.codegraph/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -223,6 +223,7 @@ impl BBox {
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 
@@ -252,12 +253,12 @@ mod tests {
     #[test]
     fn point_on_boundary_counts_as_inside() {
         let ring = unit_square();
-        // Mid-edges (Point is lat, lon).
-        assert!(point_in_polygon(Point::new(0.0005, 0.0), &ring)); // west
-        assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring)); // east
-        assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring)); // south
-        assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring)); // north
-                                                                     // Vertices.
+        // Mid-edges use Point as (lat, lon).
+        assert!(point_in_polygon(Point::new(0.0005, 0.0), &ring));
+        assert!(point_in_polygon(Point::new(0.0005, 0.001), &ring));
+        assert!(point_in_polygon(Point::new(0.0, 0.0005), &ring));
+        assert!(point_in_polygon(Point::new(0.001, 0.0005), &ring));
+        // Vertices count as inside.
         assert!(point_in_polygon(Point::new(0.0, 0.0), &ring));
         assert!(point_in_polygon(Point::new(0.001, 0.001), &ring));
         assert!((distance_to_polygon_m(Point::new(0.0005, 0.0), &ring)).abs() < 1e-9);

@@ -123,14 +123,7 @@ impl QuadtreePlaceIndex {
         }
         let place = self.places.get(idx)?;
         let &bbox = self.bboxes.get(idx)?;
-        if !bbox.intersects(query_bbox) {
-            return None;
-        }
-        if within_join_radius(cluster, place, radius) {
-            Some(place.clone())
-        } else {
-            None
-        }
+        place_if_joinable(place, bbox, query_bbox, cluster, radius)
     }
 }
 
@@ -153,6 +146,23 @@ impl PlaceIndexFactory for QuadtreePlaceIndexFactory {
 
     fn create(&self, places: &[Place]) -> Self::Index {
         QuadtreePlaceIndex::new(places.to_vec(), &self.config)
+    }
+}
+
+fn place_if_joinable(
+    place: &Place,
+    bbox: BBox,
+    query_bbox: BBox,
+    cluster: &Cluster,
+    radius: f64,
+) -> Option<Place> {
+    if !bbox.intersects(query_bbox) {
+        return None;
+    }
+    if within_join_radius(cluster, place, radius) {
+        Some(place.clone())
+    } else {
+        None
     }
 }
 

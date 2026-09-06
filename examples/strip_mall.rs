@@ -5,27 +5,35 @@
 
 use std::io::{self, Write};
 use visit_attribution::{
-    Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result, TrainConfig,
-    VisitAttributor,
+    AttributionResult, Cluster, Config, GbdtRanker, GpsPing, LabeledExample, Place, Result,
+    TrainConfig, VisitAttributor,
 };
 
-fn main() -> Result<()> {
-    // Mall ~0.004° on a side (~197k m²) so it clears large_poi_area_m2 = 1_000.
-    let mall = Place::square(1, -0.002, -0.002, 0.004, Some(531_120));
-    // Store A sits in the SW quadrant; store B in the SE — both inside the mall.
-    let store_a = Place::square(10, -0.0010, -0.0010, 0.0008, Some(445_110));
-    let store_b = Place::square(20, -0.0010, 0.0002, 0.0008, Some(722_515));
+fn catalog() -> (Place, Place, Place) {
+    (
+        Place::square(1, -0.002, -0.002, 0.004, Some(531_120)),
+        Place::square(10, -0.0010, -0.0010, 0.0008, Some(445_110)),
+        Place::square(20, -0.0010, 0.0002, 0.0008, Some(722_515)),
+    )
+}
 
-    // Dwell centered inside store A (still inside the mall footprint).
-    let pings = vec![
+fn dwell_pings() -> Vec<GpsPing> {
+    vec![
         GpsPing::new(-0.0007, -0.0007, 0.0, 6.0),
         GpsPing::new(-0.00065, -0.0007, 15.0, 6.0),
         GpsPing::new(-0.0007, -0.00065, 30.0, 6.0),
         GpsPing::new(-0.00068, -0.00068, 45.0, 6.0),
-    ];
-    let cluster = Cluster::from_pings(pings.clone())?;
+    ]
+}
+
+fn train_ranker(
+    mall: &Place,
+    store_a: &Place,
+    store_b: &Place,
+    pings: &[GpsPing],
+) -> Result<GbdtRanker> {
+    let cluster = Cluster::from_pings(pings.to_vec())?;
     let candidates = vec![mall.clone(), store_a.clone(), store_b.clone()];
-    // Repeat the labeled example so preference learning sees a stable signal.
     let examples: Vec<LabeledExample> = (0..8)
         .map(|_| LabeledExample {
             cluster: cluster.clone(),
@@ -33,8 +41,7 @@ fn main() -> Result<()> {
             true_place_id: 10,
         })
         .collect();
-
-    let ranker = GbdtRanker::train(
+    GbdtRanker::train(
         &examples,
         &TrainConfig {
             n_trees: 48,
@@ -42,8 +49,13 @@ fn main() -> Result<()> {
             learning_rate: 0.2,
             ..TrainConfig::default()
         },
-    )?;
+    )
+}
 
+fn main() -> Result<()> {
+    let (mall, store_a, store_b) = catalog();
+    let pings = dwell_pings();
+    let ranker = train_ranker(&mall, &store_a, &store_b, &pings)?;
     let config = Config::builder()
         .large_poi_area_m2(1_000.0)
         .join_radius_m(80.0)
@@ -55,7 +67,12 @@ fn main() -> Result<()> {
         .ranker(ranker)
         .build()?
         .attribute(&pings, &places)?;
+    report_visits(&result)?;
+    assert_store_a_won(&result);
+    Ok(())
+}
 
+fn report_visits(result: &AttributionResult) -> Result<()> {
     let mut out = io::stdout();
     writeln!(out, "visits={}", result.visits.len())?;
     for visit in &result.visits {
@@ -68,7 +85,10 @@ fn main() -> Result<()> {
             visit.candidates
         )?;
     }
+    Ok(())
+}
 
+fn assert_store_a_won(result: &AttributionResult) {
     assert_eq!(result.visits.len(), 1, "expected a single strip-mall visit");
     assert_eq!(
         result.visits[0].place_id, 10,
@@ -82,5 +102,4 @@ fn main() -> Result<()> {
         result.visits[0].candidates.len() >= 2,
         "join should surface competing candidates"
     );
-    Ok(())
 }

@@ -4,12 +4,16 @@ use crate::error::{Error, Result};
 
 use super::{eval_tree, Node, TrainConfig, MAX_TREES, MAX_TREE_DEPTH};
 
-pub(super) fn validate_xy(xs: &[Vec<f64>], ys: &[f64], dim: usize) -> Result<()> {
+fn ensure_xy_lengths(xs: &[Vec<f64>], ys: &[f64]) -> Result<()> {
     if xs.is_empty() || ys.is_empty() || xs.len() != ys.len() {
         return Err(Error::InvalidInput(
             "training set must be non-empty with matching lengths".into(),
         ));
     }
+    Ok(())
+}
+
+fn ensure_row_widths(xs: &[Vec<f64>], dim: usize) -> Result<()> {
     for (i, row) in xs.iter().enumerate() {
         if row.len() != dim {
             return Err(Error::InvalidInput(format!(
@@ -21,12 +25,27 @@ pub(super) fn validate_xy(xs: &[Vec<f64>], ys: &[f64], dim: usize) -> Result<()>
     Ok(())
 }
 
-pub(super) fn validate_train_config(config: &TrainConfig) -> Result<()> {
+/// Check that `xs` and `ys` are non-empty, aligned, and width-`dim`.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidInput`] when lengths mismatch or a row is the wrong
+/// width.
+pub(super) fn validate_xy(xs: &[Vec<f64>], ys: &[f64], dim: usize) -> Result<()> {
+    ensure_xy_lengths(xs, ys)?;
+    ensure_row_widths(xs, dim)
+}
+
+fn ensure_positive_train_counts(config: &TrainConfig) -> Result<()> {
     if config.n_trees == 0 || config.min_leaf == 0 || config.subsample_stride == 0 {
         return Err(Error::InvalidInput(
             "n_trees, min_leaf, and subsample_stride must be > 0".into(),
         ));
     }
+    Ok(())
+}
+
+fn ensure_train_limits(config: &TrainConfig) -> Result<()> {
     if config.n_trees > MAX_TREES {
         return Err(Error::InvalidInput(format!(
             "n_trees {} exceeds limit {MAX_TREES}",
@@ -42,6 +61,31 @@ pub(super) fn validate_train_config(config: &TrainConfig) -> Result<()> {
     Ok(())
 }
 
+/// Check that training hyperparameters are positive and within crate limits.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidInput`] when a count is zero or a limit is exceeded.
+pub(super) fn validate_train_config(config: &TrainConfig) -> Result<()> {
+    ensure_positive_train_counts(config)?;
+    ensure_train_limits(config)
+}
+
+fn residual_at(pred: f64, y: f64) -> f64 {
+    // Map ±1 labels to {0,1} for the logistic residual.
+    let y01 = if y > 0.0 { 1.0 } else { 0.0 };
+    y01 - sigmoid(pred)
+}
+
+fn sample_row<'a>(
+    xs: &'a [Vec<f64>],
+    ys: &[f64],
+    preds: &[f64],
+    i: usize,
+) -> Option<(&'a [f64], f64, f64)> {
+    Some((xs.get(i)?, *ys.get(i)?, *preds.get(i)?))
+}
+
 pub(super) fn build_residuals(
     xs: &[Vec<f64>],
     ys: &[f64],
@@ -51,20 +95,11 @@ pub(super) fn build_residuals(
     let mut residuals = Vec::with_capacity(indices.len());
     let mut sample_x = Vec::with_capacity(indices.len());
     for &i in indices {
-        let Some(&pred) = preds.get(i) else {
+        let Some((row, y, pred)) = sample_row(xs, ys, preds, i) else {
             continue;
         };
-        let Some(&y) = ys.get(i) else {
-            continue;
-        };
-        let Some(row) = xs.get(i) else {
-            continue;
-        };
-        let p = sigmoid(pred);
-        // Map ±1 labels to {0,1} for the logistic residual.
-        let y01 = if y > 0.0 { 1.0 } else { 0.0 };
-        residuals.push(y01 - p);
-        sample_x.push(row.clone());
+        residuals.push(residual_at(pred, y));
+        sample_x.push(row.to_vec());
     }
     (residuals, sample_x)
 }
@@ -125,30 +160,33 @@ fn mean(values: &[f64]) -> f64 {
 
 type Split = (usize, f64, Vec<usize>, Vec<usize>);
 
+fn scan_feature_splits(
+    xs: &[Vec<f64>],
+    ys: &[f64],
+    feature: usize,
+    config: &TrainConfig,
+    best_gain: &mut f64,
+    best: &mut Option<Split>,
+) {
+    let vals = feature_thresholds(xs, feature);
+    if vals.len() < 2 {
+        return;
+    }
+    let step = (vals.len() / config.max_bins.max(1)).max(1);
+    for (k, &threshold) in vals.iter().enumerate().step_by(step) {
+        if k + 1 == vals.len() {
+            break;
+        }
+        consider_split(xs, ys, feature, threshold, config.min_leaf, best_gain, best);
+    }
+}
+
 fn best_split(xs: &[Vec<f64>], ys: &[f64], config: &TrainConfig) -> Option<Split> {
     let dim = xs.first()?.len();
     let mut best_gain = 0.0;
     let mut best = None;
     for f in 0..dim {
-        let vals = feature_thresholds(xs, f);
-        if vals.len() < 2 {
-            continue;
-        }
-        let step = (vals.len() / config.max_bins.max(1)).max(1);
-        for (k, &threshold) in vals.iter().enumerate().step_by(step) {
-            if k + 1 == vals.len() {
-                break;
-            }
-            consider_split(
-                xs,
-                ys,
-                f,
-                threshold,
-                config.min_leaf,
-                &mut best_gain,
-                &mut best,
-            );
-        }
+        scan_feature_splits(xs, ys, f, config, &mut best_gain, &mut best);
     }
     best
 }
@@ -220,6 +258,7 @@ fn variance(values: &[f64]) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 
@@ -234,6 +273,12 @@ mod tests {
         assert!(res.is_empty() && sample.is_empty());
         let (res, sample) = build_residuals(&[], &[1.0], &[0.0], &[0]);
         assert!(res.is_empty() && sample.is_empty());
+        let (res, sample) = build_residuals(&[vec![1.0]], &[1.0], &[0.0], &[0]);
+        assert_eq!(res.len(), 1);
+        assert_eq!(sample.len(), 1);
+        let (res, sample) = build_residuals(&[vec![1.0]], &[-1.0], &[0.0], &[0]);
+        assert_eq!(res.len(), 1);
+        assert_eq!(sample.len(), 1);
     }
 
     #[test]

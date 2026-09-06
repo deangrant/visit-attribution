@@ -7,10 +7,13 @@ alwaysApply: false
 # Rust style surface
 
 - Line width **100**; method chains prefer `chain_width` **80** (`rustfmt.toml`).
-- Keep `.rs` files under ~**500** lines. `src/gbdt/mod.rs` and `src/cluster.rs`
-  are near the ceiling—extract modules instead of growing them.
+- Keep `.rs` files under ~**500** lines (warn near ~450). Split modules
+  when a file grows; clustering lives under `src/cluster/`, GBDT tests
+  under `src/gbdt/tests.rs`.
 - Public items: `///` docs; modules: `//!`. Fallible pubs include `# Errors`.
-- Prefer `#[expect(...)]` over `#[allow(...)]` for intentional lint exceptions.
+- Prefer `#[expect(...)]` over `#[allow(...)]` when MSRV allows. MSRV is
+  **1.74**, so use `#[allow(...)]` on test modules until `#[expect]` is
+  legal.
 - Match the Clippy allow-list in `Cargo.toml`; do not blanket-allow new lints.
 - Spaces only (4-space indent); trailing commas in multi-line lists; no trailing
   whitespace; at most one blank line between items.

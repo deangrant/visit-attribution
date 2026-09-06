@@ -106,18 +106,38 @@ pub fn absolute_features(
         .collect()
 }
 
+const fn hour_bin(on: bool) -> f64 {
+    if on {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn push_known_naics_hour_bins(
+    schema: &FeatureSchema,
+    naics4: Option<u32>,
+    hour: usize,
+    row: &mut Vec<f64>,
+) {
+    for code in &schema.naics4 {
+        for h in 0..24 {
+            row.push(hour_bin(naics4 == Some(*code) && h == hour));
+        }
+    }
+}
+
+fn push_unk_hour_bins(in_schema: bool, hour: usize, row: &mut Vec<f64>) {
+    for h in 0..24 {
+        row.push(hour_bin(!in_schema && h == hour));
+    }
+}
+
 fn append_naics_hour(schema: &FeatureSchema, naics4: Option<u32>, hour: u8, row: &mut Vec<f64>) {
     let hour = usize::from(hour.min(23));
     let in_schema = naics4.is_some_and(|n| schema.naics4.binary_search(&n).is_ok());
-    for code in &schema.naics4 {
-        for h in 0..24 {
-            let on = matches!(naics4, Some(n) if n == *code) && h == hour;
-            row.push(if on { 1.0 } else { 0.0 });
-        }
-    }
-    for h in 0..24 {
-        row.push(if !in_schema && h == hour { 1.0 } else { 0.0 });
-    }
+    push_known_naics_hour_bins(schema, naics4, hour, row);
+    push_unk_hour_bins(in_schema, hour, row);
 }
 
 /// Dense ranks (1 = closest). Ties get the minimum rank.
@@ -176,6 +196,18 @@ pub struct PreferencePair {
 /// Emits one row per unordered candidate pair that involves the true place.
 /// Pairs use index order `i < j` with `diff = left − right`.
 #[must_use]
+const fn preference_label(a_true: bool, b_true: bool) -> Option<f64> {
+    match (a_true, b_true) {
+        (true, false) => Some(1.0),
+        (false, true) => Some(-1.0),
+        _ => None,
+    }
+}
+
+fn feature_diff(left: &[f64], right: &[f64]) -> Vec<f64> {
+    left.iter().zip(right.iter()).map(|(a, b)| a - b).collect()
+}
+
 pub fn preference_pairs(
     rows: &[(PlaceId, Vec<f64>)],
     true_place_id: PlaceId,
@@ -183,18 +215,12 @@ pub fn preference_pairs(
     let mut pairs = Vec::new();
     for (i, left) in rows.iter().enumerate() {
         for right in rows.iter().skip(i + 1) {
-            let a_true = left.0 == true_place_id;
-            let b_true = right.0 == true_place_id;
-            let label = if a_true && !b_true {
-                1.0
-            } else if b_true && !a_true {
-                -1.0
-            } else {
+            let Some(label) = preference_label(left.0 == true_place_id, right.0 == true_place_id)
+            else {
                 continue;
             };
-            let diff: Vec<f64> = left.1.iter().zip(right.1.iter()).map(|(a, b)| a - b).collect();
             pairs.push(PreferencePair {
-                diff,
+                diff: feature_diff(&left.1, &right.1),
                 label,
                 #[cfg(test)]
                 left_id: left.0,
@@ -207,6 +233,7 @@ pub fn preference_pairs(
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
     use crate::error::Result;
@@ -255,43 +282,52 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn preference_pairs_emit_one_unordered_pair_per_distractor() -> Result<()> {
+    fn offset_place(id: PlaceId, origin: f64) -> Place {
+        Place::new(
+            id,
+            vec![
+                Point::new(origin, origin),
+                Point::new(origin, origin + 0.001),
+                Point::new(origin + 0.001, origin + 0.001),
+                Point::new(origin + 0.001, origin),
+            ],
+            Point::new(origin + 0.0005, origin + 0.0005),
+            None,
+        )
+    }
+
+    fn three_candidate_pairs() -> Result<Vec<PreferencePair>> {
         let schema = FeatureSchema::new(vec![]);
         let cluster = Cluster::from_pings(vec![
             GpsPing::new(0.0, 0.0, 0.0, 5.0),
             GpsPing::new(0.0, 0.0, 10.0, 5.0),
         ])?;
-        let true_place = bare_place(1, None);
-        let a = Place::new(
-            2,
-            vec![
-                Point::new(0.01, 0.01),
-                Point::new(0.01, 0.011),
-                Point::new(0.011, 0.011),
-                Point::new(0.011, 0.01),
+        let rows = absolute_features(
+            &schema,
+            &cluster,
+            &[
+                bare_place(1, None),
+                offset_place(2, 0.01),
+                offset_place(3, 0.02),
             ],
-            Point::new(0.0105, 0.0105),
-            None,
         );
-        let b = Place::new(
-            3,
-            vec![
-                Point::new(0.02, 0.02),
-                Point::new(0.02, 0.021),
-                Point::new(0.021, 0.021),
-                Point::new(0.021, 0.02),
-            ],
-            Point::new(0.0205, 0.0205),
-            None,
-        );
-        let rows = absolute_features(&schema, &cluster, &[true_place, a, b]);
-        let pairs = preference_pairs(&rows, 1);
+        Ok(preference_pairs(&rows, 1))
+    }
+
+    #[test]
+    fn preference_pairs_emit_one_unordered_pair_per_distractor() -> Result<()> {
+        let pairs = three_candidate_pairs()?;
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|p| {
             (p.left_id == 1) != (p.right_id == 1)
                 && ((p.label - 1.0).abs() < f64::EPSILON || (p.label + 1.0).abs() < f64::EPSILON)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn preference_pairs_name_each_distractor() -> Result<()> {
+        let pairs = three_candidate_pairs()?;
         let mut distractors: Vec<_> = pairs
             .iter()
             .map(|p| {
@@ -332,8 +368,9 @@ mod tests {
     #[test]
     fn unseen_or_missing_naics_activates_unk_hour() -> Result<()> {
         let schema = FeatureSchema::new(vec![4451]);
+        // 3600 s is hour 1 on a Unix-like epoch day.
         let cluster = Cluster::from_pings(vec![
-            GpsPing::new(0.0, 0.0, 3_600.0, 5.0), // hour 1 if Unix-like epoch day
+            GpsPing::new(0.0, 0.0, 3_600.0, 5.0),
             GpsPing::new(0.0, 0.0, 3_610.0, 5.0),
         ])?;
         let hour = usize::from(cluster.hour_of_day());
@@ -342,7 +379,8 @@ mod tests {
         let known = bare_place(3, Some(445_110));
 
         let rows = absolute_features(&schema, &cluster, &[unseen, missing, known]);
-        let unk_base = 4 + 24; // after known code block
+        // UNK hour block starts after the four distances and one known code.
+        let unk_base = 4 + 24;
         assert!((rows[0].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
         assert!((rows[1].1[unk_base + hour] - 1.0).abs() < f64::EPSILON);
         assert!((rows[2].1[unk_base + hour]).abs() < f64::EPSILON);

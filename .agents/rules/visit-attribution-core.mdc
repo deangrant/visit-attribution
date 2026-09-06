@@ -7,7 +7,7 @@ alwaysApply: true
 
 - **Std-first:** do not add `[dependencies]` without an explicit human ask.
 - `unsafe_code = forbid`. Clippy `all`/`pedantic`/`nursery`/`cargo` deny
-  (`clippy.toml` cognitive complexity 8). Rustdoc `all = deny`. Supply chain:
+  (`clippy.toml` cognitive complexity 5). Rustdoc `all = deny`. Supply chain:
   `deny.toml` + `.github/workflows/supply-chain.yml`.
 - MSRV **1.74**. CI is stable-only—do not use post-1.74 syntax
   (`#[expect]`, `reason =`, `unfulfilled_lint_expectations` are 1.81+).

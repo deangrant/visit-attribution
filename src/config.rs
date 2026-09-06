@@ -94,11 +94,28 @@ impl Config {
     }
 }
 
+fn finite_and_signed(value: f64, allow_zero: bool) -> bool {
+    value.is_finite()
+        && if allow_zero {
+            value >= 0.0
+        } else {
+            value > 0.0
+        }
+}
+
+const fn bound_label(allow_zero: bool) -> &'static str {
+    if allow_zero {
+        ">= 0"
+    } else {
+        "> 0"
+    }
+}
+
 fn require_finite(name: &str, value: f64, allow_zero: bool) -> Result<()> {
-    if !value.is_finite() || (allow_zero && value < 0.0) || (!allow_zero && value <= 0.0) {
+    if !finite_and_signed(value, allow_zero) {
         return Err(Error::InvalidInput(format!(
             "`{name}` must be finite and {}",
-            if allow_zero { ">= 0" } else { "> 0" }
+            bound_label(allow_zero)
         )));
     }
     Ok(())
@@ -198,6 +215,7 @@ config_f64_setter!(
 );
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
     use crate::error::Result;

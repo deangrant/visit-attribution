@@ -211,6 +211,7 @@ pub struct Visit {
 }
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
     use crate::error::Result;

@@ -18,6 +18,10 @@ pub struct AttributionResult {
 }
 
 /// Full pipeline: clean → cluster → join → rank.
+///
+/// The default builder wires [`DefaultPingCleaner`], [`TwoPassClusterer`],
+/// [`QuadtreePlaceIndexFactory`], and a required [`GbdtRanker`]. Custom stages
+/// or a different [`Ranker`] go through [`with_parts`].
 #[derive(Debug, Clone)]
 pub struct VisitAttributor<Cl, C, F, R> {
     config: Config,
@@ -74,7 +78,10 @@ where
         })
     }
 
-    /// Borrow the pipeline configuration.
+    /// Borrow the build-time configuration snapshot.
+    ///
+    /// Stages hold their own copies from construction; this value is not
+    /// consulted during [`Self::attribute`].
     #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config
@@ -82,6 +89,9 @@ where
 }
 
 /// Fluent builder for [`VisitAttributor`] with default stages.
+///
+/// For non-[`GbdtRanker`] rankers or alternate clean/cluster/join stages, use
+/// [`with_parts`].
 #[derive(Debug, Default)]
 #[must_use]
 pub struct VisitAttributorBuilder {
@@ -90,7 +100,19 @@ pub struct VisitAttributorBuilder {
 }
 
 impl VisitAttributorBuilder {
-    /// Build the attributor.
+    /// Set validated pipeline configuration.
+    pub const fn config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Set the trained or loaded ranker.
+    pub fn ranker(mut self, ranker: GbdtRanker) -> Self {
+        self.ranker = Some(ranker);
+        self
+    }
+
+    /// Build the attributor with default stage implementations.
     ///
     /// # Errors
     ///
@@ -107,20 +129,6 @@ impl VisitAttributorBuilder {
             ranker,
             config,
         })
-    }
-}
-
-impl VisitAttributorBuilder {
-    /// Set validated pipeline configuration.
-    pub const fn config(mut self, config: Config) -> Self {
-        self.config = Some(config);
-        self
-    }
-
-    /// Set the trained or loaded ranker.
-    pub fn ranker(mut self, ranker: GbdtRanker) -> Self {
-        self.ranker = Some(ranker);
-        self
     }
 }
 

@@ -44,6 +44,7 @@ impl From<io::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
 mod tests {
     use super::*;
     use std::io::ErrorKind;
