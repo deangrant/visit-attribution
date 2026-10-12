@@ -35,6 +35,6 @@ fn attributes_visit_to_trained_place() -> Result<()> {
     let result = attributor.attribute(&pings, &places)?;
     assert_eq!(result.visits.len(), 1);
     assert_eq!(result.visits[0].place_id, 10);
-    assert!(result.unmatched_clusters.is_empty());
+    assert_eq!(result.unmatched_clusters, []);
     Ok(())
 }

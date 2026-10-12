@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn jumpy_filter_empty_and_short_inputs() {
-        assert!(filter_jumpy(&[], 50.0).is_empty());
+        assert_eq!(filter_jumpy(&[], 50.0), []);
         let one = [GpsPing::new(0.0, 0.0, 0.0, 10.0)];
         assert_eq!(filter_jumpy(&one, 50.0).len(), 1);
         assert_eq!(filter_driving(&one, 1.15, 60.0, 8.0).len(), 1);

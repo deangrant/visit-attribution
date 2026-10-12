@@ -186,7 +186,7 @@ mod tests {
         let tree = BBoxQuadtree::build(&[]);
         let mut hits = Vec::new();
         tree.query(unit(), &mut hits);
-        assert!(hits.is_empty());
+        assert_eq!(hits, []);
 
         let quads = quadrants(unit());
         let mut children = quads.map(|bounds| QuadNode::Leaf {

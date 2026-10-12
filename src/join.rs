@@ -230,7 +230,7 @@ mod tests {
     }
 
     fn assert_no_candidates(cfg: Config, places: &[Place], cluster: &Cluster) {
-        assert!(candidates_for(cfg, places, cluster).is_empty());
+        assert_eq!(candidates_for(cfg, places, cluster), []);
     }
 
     fn assert_one_candidate(cands: &[Place], id: PlaceId) {
@@ -324,8 +324,8 @@ mod tests {
             let col = f64::from(i % 8);
             places.push(square(
                 u64::from(i) + 2,
-                0.01 + row * 0.01,
-                0.01 + col * 0.01,
+                row.mul_add(0.01, 0.01),
+                col.mul_add(0.01, 0.01),
             ));
         }
         let cands = candidates_for(
@@ -363,7 +363,7 @@ mod tests {
             start_time_s: 0.0,
             end_time_s: 0.0,
         };
-        assert!(index.candidates(&empty).is_empty());
+        assert_eq!(index.candidates(&empty), []);
         let cluster = two_ping_cluster(0.0005, 0.0005, 5.0)?;
         let bbox = crate::test_util::some(BBox::from_ring(
             &cluster.pings.iter().map(|p| p.point).collect::<Vec<_>>(),

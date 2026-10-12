@@ -267,8 +267,8 @@ mod tests {
         assert!((mean(&[])).abs() < f64::EPSILON);
         assert!((variance(&[])).abs() < f64::EPSILON);
         let (left, right) = partition_by_threshold(&[vec![]], 3, 0.0);
-        assert!(left.is_empty());
-        assert!(right.is_empty());
+        assert_eq!(left, []);
+        assert_eq!(right, []);
         let (res, sample) = build_residuals(&[vec![1.0]], &[], &[0.0], &[0]);
         assert!(res.is_empty() && sample.is_empty());
         let (res, sample) = build_residuals(&[], &[1.0], &[0.0], &[0]);

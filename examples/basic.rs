@@ -44,6 +44,6 @@ fn main() -> Result<()> {
             visit.candidates
         )?;
     }
-    assert!(!visits.is_empty());
+    assert_ne!(visits, []);
     Ok(())
 }

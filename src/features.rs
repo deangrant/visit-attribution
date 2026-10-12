@@ -348,17 +348,13 @@ mod tests {
         let schema = FeatureSchema::new(vec![4451]);
         assert_eq!(schema.dim(), 4 + 2 * 24);
         assert_eq!(FeatureSchema::new(vec![]).dim(), 4 + 24);
-        assert!(absolute_features(
-            &schema,
-            &Cluster {
-                pings: Vec::new(),
-                centroid: Point::new(0.0, 0.0),
-                start_time_s: 0.0,
-                end_time_s: 0.0,
-            },
-            &[]
-        )
-        .is_empty());
+        let empty = Cluster {
+            pings: Vec::new(),
+            centroid: Point::new(0.0, 0.0),
+            start_time_s: 0.0,
+            end_time_s: 0.0,
+        };
+        assert_eq!(absolute_features(&schema, &empty, &[]), []);
         assert!(preference_pairs(&[(1, vec![0.0]), (2, vec![1.0])], 99).is_empty());
         let flipped = preference_pairs(&[(2, vec![0.0]), (1, vec![1.0])], 1);
         assert_eq!(flipped.len(), 1);
@@ -390,7 +386,7 @@ mod tests {
 
     #[test]
     fn dense_ranks_empty_unique_and_ties() {
-        assert!(ranks(&[]).is_empty());
+        assert_eq!(ranks(&[]), []);
         assert_eq!(ranks(&[3.0, 1.0, 2.0]), vec![3.0, 1.0, 2.0]);
         assert_eq!(ranks(&[1.0, 1.0, 2.0]), vec![1.0, 1.0, 3.0]);
         assert_eq!(ranks(&[5.0]), vec![1.0]);
