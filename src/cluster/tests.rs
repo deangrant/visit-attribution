@@ -51,7 +51,7 @@ fn clusters_nearby_stationary_pings() {
         ping(1.0001, 1.0, 10_010.0),
     ];
     let clusters = clusterer.cluster(&pings, &[]);
-    assert!(!clusters.is_empty());
+    assert_ne!(clusters, []);
     assert!(clusters.iter().any(|c| c.pings.len() >= 2));
 }
 
@@ -193,11 +193,14 @@ fn density_clustering_rejects_mid_range_hops_without_neighbors() {
 
 #[test]
 fn empty_inputs_and_large_poi_trait_cluster() -> Result<()> {
-    assert!(density().cluster(&[], &[]).is_empty());
-    assert!(TwoPassClusterer::new(Config::default()).cluster(&[], &[]).is_empty());
+    assert_eq!(density().cluster(&[], &[]), []);
+    assert_eq!(
+        TwoPassClusterer::new(Config::default()).cluster(&[], &[]),
+        []
+    );
     let (clusters, used) = LargePoiClusterer::new(large_cfg()?).extract(&[], &[]);
-    assert!(clusters.is_empty());
-    assert!(used.is_empty());
+    assert_eq!(clusters, []);
+    assert_eq!(used, []);
     let place = square_place(1, 0.001);
     let pings = [ping(0.0, 0.0, 0.0), ping(0.0001, 0.0, 10.0)];
     let via_trait = LargePoiClusterer::new(large_cfg()?).cluster(&pings, &[place]);
@@ -210,12 +213,12 @@ fn short_large_poi_run_is_discarded() -> Result<()> {
     let place = square_place(1, 0.001);
     let (clusters, used) =
         LargePoiClusterer::new(large_cfg()?).extract(&[ping(0.0, 0.0, 0.0)], &[place]);
-    assert!(clusters.is_empty());
+    assert_eq!(clusters, []);
     assert_eq!(used, [false]);
     let mut out = Vec::new();
     push_if_dense_enough(&mut out, Vec::new(), 0);
-    assert!(out.is_empty());
+    assert_eq!(out, []);
     push_if_dense_enough(&mut out, vec![ping(0.0, 0.0, 0.0)], 2);
-    assert!(out.is_empty());
+    assert_eq!(out, []);
     Ok(())
 }

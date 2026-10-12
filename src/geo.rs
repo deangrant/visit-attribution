@@ -114,8 +114,8 @@ fn dist_point_segment_m(p: Point, a: Point, b: Point) -> f64 {
     } else {
         (apx.mul_add(abx, apy * aby) / ab2).clamp(0.0, 1.0)
     };
-    let cx = ax + t * abx;
-    let cy = ay + t * aby;
+    let cx = t.mul_add(abx, ax);
+    let cy = t.mul_add(aby, ay);
     let dx = px - cx;
     let dy = py - cy;
     dx.hypot(dy)
